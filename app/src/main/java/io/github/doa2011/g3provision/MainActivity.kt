@@ -5,6 +5,7 @@ import android.app.Activity
 import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -17,6 +18,10 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val manager by lazy { getSystemService(BLUETOOTH_SERVICE) as BluetoothManager }
     private val devices = linkedMapOf<String, BluetoothDevice>()
+    private val deviceLabels = linkedMapOf<String, String>()
+    private var scanning = false
+    private var scanCount = 0
+    private val stopScanRunnable = Runnable { stopScanning() }
     private val service = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb")
     private val txUuid = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
     private val rxUuid = UUID.fromString("0000ff02-0000-1000-8000-00805f9b34fb")
@@ -40,7 +45,7 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
         host = field("Windows LAN IPv4"); mac = field("虚拟网关 MAC", "020000000001")
-        layout.addView(Button(this).apply { text="扫描 SENSOR3"; setOnClickListener { scan() } })
+        layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接 G3"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
@@ -53,26 +58,62 @@ class MainActivity : Activity() {
         if(missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(),100); return false }
         return true
     }
+    private fun refreshDevices() {
+        val selected = selector.selectedItemPosition
+        selector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, deviceLabels.values.toList())
+        if (selected in deviceLabels.indices) selector.setSelection(selected)
+    }
     private val scanner=object: ScanCallback() {
         override fun onScanResult(callbackType:Int,result:ScanResult) {
-            val name=result.scanRecord?.deviceName ?: return
-            if(!name.startsWith("SENSOR3_",true)) return
-            val address=result.device.address
-            if(devices.put(address,result.device)==null) runOnUiThread {
-                selector.adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,
-                    devices.keys.map { name+" ("+it+")" })
+            val address = result.device.address
+            val name = result.scanRecord?.deviceName
+                ?: try { result.device.name } catch (_: SecurityException) { null }
+            val display = name?.takeIf { it.isNotBlank() } ?: "未命名设备"
+            scanCount++
+            if (devices.put(address, result.device) == null || deviceLabels[address] != "$display ($address, RSSI ${result.rssi})") {
+                deviceLabels[address] = "$display ($address, RSSI ${result.rssi})"
+                runOnUiThread { refreshDevices() }
             }
         }
+        override fun onScanFailed(errorCode: Int) {
+            scanning = false
+            note("扫描失败，错误码=$errorCode")
+        }
+    }
+    private fun stopScanning() {
+        if (!scanning) return
+        scanning = false
+        try { manager.adapter.bluetoothLeScanner?.stopScan(scanner) }
+        catch (e: Exception) { note("停止扫描异常: " + e.message) }
+        note("扫描结束：收到 $scanCount 条广播，发现 ${devices.size} 台设备")
     }
     private fun scan() {
-        if(!permitted()) return
-        devices.clear(); note("扫描 15 秒")
-        manager.adapter.bluetoothLeScanner.startScan(scanner)
-        handler.postDelayed({manager.adapter.bluetoothLeScanner.stopScan(scanner);note("扫描结束")},15000)
+        if (!permitted()) { note("请先授予附近设备权限，再点击扫描"); return }
+        if (!manager.adapter.isEnabled) { note("请先打开蓝牙"); return }
+        stopScanning()
+        devices.clear()
+        deviceLabels.clear()
+        refreshDevices()
+        scanCount = 0
+        val bleScanner = manager.adapter.bluetoothLeScanner ?: return note("BLE 扫描器不可用")
+        try {
+            scanning = true
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+            bleScanner.startScan(null, settings, scanner)
+            note("扫描全部 BLE 设备 20 秒；不再按 SENSOR3_ 名称过滤")
+            handler.removeCallbacks(stopScanRunnable)
+            handler.postDelayed(stopScanRunnable, 20000)
+        } catch (e: Exception) {
+            scanning = false
+            note("启动扫描异常: " + e.message)
+        }
     }
     private fun connect() {
         if(!permitted()) return
         val addr=devices.keys.elementAtOrNull(selector.selectedItemPosition) ?: return note("请先扫描")
+        stopScanning()
         tx=null;seq=0;chunks=emptyList();gatt?.close()
         note("连接 "+addr)
         gatt=devices[addr]?.connectGatt(this,false,callbacks,BluetoothDevice.TRANSPORT_LE)
@@ -136,5 +177,5 @@ class MainActivity : Activity() {
         val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
         handler.postDelayed({sendChunks()},600)
     }
-    override fun onDestroy() {super.onDestroy();gatt?.close()}
+    override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
 }
