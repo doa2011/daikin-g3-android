@@ -32,27 +32,30 @@ class MainActivity : Activity() {
     private var chunks = listOf<ByteArray>()
     private var chunkIndex = 0
     private lateinit var selector: Spinner
+    private lateinit var bleAddress: EditText
     private lateinit var ssid: EditText
     private lateinit var password: EditText
     private lateinit var host: EditText
     private lateinit var mac: EditText
     private lateinit var output: TextView
-    private fun note(s: String) { runOnUiThread { output.append(s + "\n") } }
+    private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20,20,20,20) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
+        bleAddress = field("BLE MAC（可直接连接）", "D0:EF:76:25:5D:CE")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
         host = field("Windows LAN IPv4"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
-        layout.addView(Button(this).apply { text="连接 G3"; setOnClickListener { connect() } })
+        layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
+        layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(layout); note("仅 BLE 配网，不执行 OTA")
     }
     private fun permitted(): Boolean {
-        val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT)
+        val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         val missing=p.filter { checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED }
         if(missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(),100); return false }
@@ -70,6 +73,7 @@ class MainActivity : Activity() {
                 ?: try { result.device.name } catch (_: SecurityException) { null }
             val display = name?.takeIf { it.isNotBlank() } ?: "未命名设备"
             scanCount++
+            if (address.equals("D0:EF:76:25:5D:CE", true)) note("已发现目标 G3：$display，RSSI=${result.rssi}")
             if (devices.put(address, result.device) == null || deviceLabels[address] != "$display ($address, RSSI ${result.rssi})") {
                 deviceLabels[address] = "$display ($address, RSSI ${result.rssi})"
                 runOnUiThread { refreshDevices() }
@@ -114,9 +118,26 @@ class MainActivity : Activity() {
         if(!permitted()) return
         val addr=devices.keys.elementAtOrNull(selector.selectedItemPosition) ?: return note("请先扫描")
         stopScanning()
-        tx=null;seq=0;chunks=emptyList();gatt?.close()
-        note("连接 "+addr)
-        gatt=devices[addr]?.connectGatt(this,false,callbacks,BluetoothDevice.TRANSPORT_LE)
+        connectDevice(devices[addr] ?: return note("选中设备已失效"))
+    }
+    private fun connectAddress() {
+        if (!permitted()) return
+        val address = bleAddress.text.toString().trim().uppercase()
+        if (!BluetoothAdapter.checkBluetoothAddress(address)) return note("BLE MAC 格式无效")
+        try {
+            val device = manager.adapter.getRemoteDevice(address)
+            connectDevice(device)
+        } catch (e: Exception) { note("直接连接失败: " + e.message) }
+    }
+    private fun connectDevice(device: BluetoothDevice) {
+        stopScanning()
+        tx = null
+        seq = 0
+        chunks = emptyList()
+        gatt?.close()
+        note("尝试 GATT 连接 " + device.address)
+        try { gatt = device.connectGatt(this, false, callbacks, BluetoothDevice.TRANSPORT_LE) }
+        catch (e: Exception) { note("GATT 异常: " + e.message) }
     }
     private val callbacks=object: BluetoothGattCallback() {
         override fun onConnectionStateChange(g:BluetoothGatt,status:Int,newState:Int) {
