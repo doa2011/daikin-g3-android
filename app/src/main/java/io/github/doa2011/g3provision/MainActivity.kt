@@ -45,15 +45,15 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20,20,20,20) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
-        bleAddress = field("BLE MAC（可直接连接）", "D0:EF:76:25:5D:CE")
+        bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("Windows LAN IPv4"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("NAS 上 G3 专用服务 IPv4（HTTPS；MQTT TLS 同 IP:8883）"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("仅 BLE 配网，不执行 OTA")
+        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；服务端 HTTPS/MQTT 使用同一 NAS 专用 IP，MQTT TLS 端口固定 8883。此 App 不执行 OTA。")
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
@@ -199,7 +199,7 @@ class MainActivity : Activity() {
         } catch(e:Exception) {note("错误 "+e.message)}
     }
     private fun sendChunks() {
-        if(chunkIndex>=chunks.size) {chunks=emptyList();note("发送完毕，需检查 DHCP 确认上线");return}
+        if(chunkIndex>=chunks.size) {chunks=emptyList();note("BLE 配网数据已发送；尚不代表设备已入网。请在路由器 DHCP 列表核对 Wi-Fi STA MAC，再检查 NAS HTTPS/MQTT 日志。");return}
         val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
         handler.postDelayed({sendChunks()},600)
     }
