@@ -47,13 +47,13 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("NAS 上 G3 专用服务 IPv4（HTTPS；MQTT TLS 同 IP:8883）"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("Linux 服务端 IPv4（HTTPS 443 + 临时 MQTT TLS 8883）"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；服务端 HTTPS/MQTT 使用同一 NAS 专用 IP，MQTT TLS 端口固定 8883。此 App 不执行 OTA。")
+        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写运行 G3 迁移服务的 Linux 主机 IPv4（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
