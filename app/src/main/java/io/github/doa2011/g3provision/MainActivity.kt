@@ -21,6 +21,7 @@ class MainActivity : Activity() {
     private val deviceLabels = linkedMapOf<String, String>()
     private var scanning = false
     private var scanCount = 0
+    private var lastTargetRssiLog = 0L
     private val stopScanRunnable = Runnable { stopScanning() }
     private val service = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb")
     private val txUuid = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
@@ -73,8 +74,11 @@ class MainActivity : Activity() {
                 ?: try { result.device.name } catch (_: SecurityException) { null }
             val display = name?.takeIf { it.isNotBlank() } ?: "未命名设备"
             scanCount++
-            if (address.equals("D0:EF:76:25:5D:CE", true)) note("已发现目标 G3：$display，RSSI=${result.rssi}")
-            if (devices.put(address, result.device) == null || deviceLabels[address] != "$display ($address, RSSI ${result.rssi})") {
+            if (address.equals("D0:EF:76:25:5D:CE", true) && android.os.SystemClock.elapsedRealtime() - lastTargetRssiLog > 3000) {
+                lastTargetRssiLog = android.os.SystemClock.elapsedRealtime()
+                note("已发现目标 G3：$display，RSSI=${result.rssi}")
+            }
+            if (devices.put(address, result.device) == null) {
                 deviceLabels[address] = "$display ($address, RSSI ${result.rssi})"
                 runOnUiThread { refreshDevices() }
             }
@@ -117,6 +121,7 @@ class MainActivity : Activity() {
     private fun connect() {
         if(!permitted()) return
         val addr=devices.keys.elementAtOrNull(selector.selectedItemPosition) ?: return note("请先扫描")
+        note("选中设备: " + (deviceLabels[addr] ?: addr))
         stopScanning()
         connectDevice(devices[addr] ?: return note("选中设备已失效"))
     }
