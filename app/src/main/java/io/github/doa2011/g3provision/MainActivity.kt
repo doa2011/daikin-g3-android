@@ -61,7 +61,7 @@ class MainActivity : Activity() {
     private fun refreshDevices() {
         val selected = selector.selectedItemPosition
         selector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, deviceLabels.values.toList())
-        if (selected in deviceLabels.indices) selector.setSelection(selected)
+        if (selected >= 0 && selected < deviceLabels.size) selector.setSelection(selected)
     }
     private val scanner=object: ScanCallback() {
         override fun onScanResult(callbackType:Int,result:ScanResult) {
