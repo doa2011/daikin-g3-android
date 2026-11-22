@@ -30,7 +30,8 @@ class G3MqttBroker(
     private var listener: SSLServerSocket? = null
     private val workers = Executors.newCachedThreadPool()
     private val delayed = Executors.newSingleThreadScheduledExecutor()
-    private val clients = ConcurrentHashMap.newKeySet<Client>()\n    private val acknowledged = ConcurrentHashMap.newKeySet<String>()
+    private val clients = ConcurrentHashMap.newKeySet<Client>()
+    private val acknowledged = ConcurrentHashMap.newKeySet<String>()
 
     fun start() {
         if (running) return
