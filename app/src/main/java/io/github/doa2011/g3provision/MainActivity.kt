@@ -182,6 +182,15 @@ class MainActivity : Activity() {
 
 
     @Suppress("DEPRECATION")
+    private fun currentGatewayIpv4(): String {
+        return try {
+            val wifi = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+            val gateway = wifi.dhcpInfo.gateway
+            if (gateway == 0) "" else listOf(gateway and 255, (gateway shr 8) and 255, (gateway shr 16) and 255, (gateway shr 24) and 255).joinToString(".")
+        } catch (_: Exception) { "" }
+    }
+
+    @Suppress("DEPRECATION")
     private fun currentWifiIpv4(): String {
         return try {
             val wifi = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -192,16 +201,23 @@ class MainActivity : Activity() {
 
     private fun startLocalHttps() {
         try {
-            val ip = host.text.toString().trim()
-            val parts = ip.split(".")
-            require(parts.size == 4 && parts.all { it.toIntOrNull() in 0..255 }) { "虚拟服务 IPv4 无效" }\n            require(phoneParts.size == 4 && phoneParts.all { it.toIntOrNull() in 0..255 }) { "手机 Wi-Fi IPv4 无效" }\n            require(phone != ip) { "手机 IP 与虚拟服务 IP 应不同；请使用路由器 IP 作为虚拟服务 IP" }
+            val virtualIp = host.text.toString().trim()
+            val virtualParts = virtualIp.split(".")
+            val phone = phoneIp.text.toString().trim()
+            val phoneParts = phone.split(".")
+            require(virtualParts.size == 4 && virtualParts.all { it.toIntOrNull() in 0..255 }) { "虚拟服务 IPv4 无效" }
+            require(phoneParts.size == 4 && phoneParts.all { it.toIntOrNull() in 0..255 }) { "手机 Wi-Fi IPv4 无效" }
+            require(phone != virtualIp) { "手机 IP 与虚拟服务 IP 应不同；虚拟服务 IP 应填写路由器 LAN 地址" }
             val sta = deviceStaMac.text.toString().trim().replace(":", "").replace("-", "").uppercase()
             require(Regex("[0-9A-F]{12}").matches(sta)) { "请填写 G3 的 Wi-Fi STA MAC，不是 BLE MAC" }
+            val gateway = mac.text.toString().trim().replace(":", "").replace("-", "").uppercase()
+            require(Regex("[0-9A-F]{12}").matches(gateway)) { "虚拟网关 MAC 无效" }
             val intent = android.content.Intent(this, G3MigrationService::class.java)
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
-                .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + ip)
+                .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + virtualIp)
+                .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-            note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 需将虚拟服务 IP 的 TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 仍未启用。")
+            note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 尚未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
     }
 
