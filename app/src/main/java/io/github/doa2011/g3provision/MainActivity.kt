@@ -51,7 +51,7 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("目标 ESP32 固件版本（如 1.2.3）")
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("目标 ESP32 固件版本（如 1.2.3）"); firmwareFile = java.io.File(filesDir, "selected-g3-esp32.bin").takeIf { it.exists() }
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
@@ -246,7 +246,7 @@ class MainActivity : Activity() {
         }
         val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(android.content.Intent.CATEGORY_OPENABLE)
-            .setType("application/octet-stream")
+            .setType("*/*")
         startActivityForResult(intent, 301)
     }
 
