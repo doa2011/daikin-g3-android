@@ -19,7 +19,7 @@ internal object G3BlufiProtocol {
         require(passwordBytes.size <= 64) { "Wi-Fi 密码不能超过 64 字节 UTF-8" }
 
         val octets = gatewayIp.split('.')
-        require(octets.size == 4 && octets.all { it.isNotEmpty() && it.all(Char::isDigit) && it.toIntOrNull() in 0..255 }) {
+        require(octets.size == 4 && octets.all { it.isNotEmpty() && it.all(Char::isDigit) && (it.toIntOrNull()?.let { n -> n in 0..255 } == true) }) {
             "网关 IPv4 地址无效"
         }
         val canonicalIp = octets.joinToString(".") { it.toInt().toString() }
