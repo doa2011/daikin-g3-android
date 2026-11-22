@@ -191,7 +191,7 @@ class MainActivity : Activity() {
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
                 .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + ip)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-            note("已请求启动手机 HTTPS 服务；当前仅完成 HTTPS 阶段，MQTT Broker 和 OTA 尚未集成。")
+            note("已请求启动手机 HTTPS 服务；HTTPS 与 MQTT 服务启动请求已提交；OTA 仍未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
     }
 
