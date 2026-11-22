@@ -108,7 +108,7 @@ class G3MigrationService:Service() {
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
-        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 18883 服务运行中").setOngoing(true).build()
+        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 8883 服务运行中").setOngoing(true).build()
         startForeground(41,n)
         try {
             val pm=getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
@@ -126,7 +126,7 @@ class G3MigrationService:Service() {
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();broker=G3MqttBroker(mac,gateway,id.ssl);broker?.start()
-            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 + MQTT TLS 18883 running").apply()
+            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 + MQTT TLS 8883 running").apply()
         } catch(e:Exception) {
             getSharedPreferences("g3",0).edit().putString("service_state","ERROR: "+(e.message?:e.javaClass.simpleName)).apply()
             stopSelf()
