@@ -28,6 +28,7 @@ class G3MqttBroker(
     private val onAckState: (Set<String>) -> Unit = {}
 ) {
     @Volatile private var running = false
+    @Volatile private var otaCommandSent = false
     private var listener: SSLServerSocket? = null
     private val workers = Executors.newCachedThreadPool()
     private val delayed = Executors.newSingleThreadScheduledExecutor()
@@ -65,8 +66,9 @@ class G3MqttBroker(
     }
 
 
+    @Synchronized
     fun triggerEsp32Upgrade(version: String): Boolean {
-        if (!allGatewayRepliesObserved() || !version.matches(Regex("[A-Za-z0-9_.-]{1,31}"))) return false
+        if (otaCommandSent || !allGatewayRepliesObserved() || !version.matches(Regex("[A-Za-z0-9_.-]{1,31}"))) return false
         val topic = "SENSOR/" + mac + "/mqtt/service/ota"
         val payload = JSONObject()
             .put("client_token", "iotcloud-" + java.util.UUID.randomUUID().toString().replace("-", "").take(16))
@@ -76,6 +78,7 @@ class G3MqttBroker(
         val recipients = clients.filter { it.accepts(topic) }
         if (recipients.isEmpty()) return false
         recipients.forEach { it.sendPublish(topic, payload, 1) }
+        otaCommandSent = true
         return true
     }
 
