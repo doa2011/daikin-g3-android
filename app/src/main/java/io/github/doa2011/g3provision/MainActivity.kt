@@ -5,6 +5,7 @@ import android.app.Activity
 import android.bluetooth.*
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanSettings
 import android.content.pm.PackageManager
 import android.os.Build
@@ -23,7 +24,24 @@ class MainActivity : Activity() {
     private var scanning = false
     private var scanCount = 0
     private var lastTargetRssiLog = 0L
+    private var targetSeen = false
+    private var targetScanFallbackStarted = false
+    private var activeScanSettings: ScanSettings? = null
     private val stopScanRunnable = Runnable { stopScanning() }
+    private val targetScanFallbackRunnable = Runnable { startTargetScanFallback() }
+    private val blufiTimeoutRunnable = Runnable {
+        if (blufiVersionRequested && !blufiVersionReceived) {
+            blufiVersionRequested = false
+            note("BLUFi 版本应答超时：5 秒内未收到 0x41。没有发送 Wi-Fi 配置；请确认 G3 处于配网模式后点击“重试 BLUFi 握手”。")
+        }
+    }
+    private var blufiVersionRequested = false
+    private var blufiVersionReceived = false
+    private var pendingProvision = false
+    private var provisioningSending = false
+    private var writeInFlight = false
+    private var writeRetryCount = 0
+    private val writeQueue = java.util.ArrayDeque<ByteArray>()
     private val service = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb")
     private val txUuid = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
     private val rxUuid = UUID.fromString("0000ff02-0000-1000-8000-00805f9b34fb")
@@ -31,8 +49,7 @@ class MainActivity : Activity() {
     private var gatt: BluetoothGatt? = null
     private var tx: BluetoothGattCharacteristic? = null
     private var seq = 0
-    private var chunks = listOf<ByteArray>()
-    private var chunkIndex = 0
+    private var chunks = emptyList<G3BlufiProtocol.Chunk>()
     private lateinit var selector: Spinner
     private lateinit var bleAddress: EditText
     private lateinit var ssid: EditText
@@ -52,14 +69,15 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,12,20,12) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
-        bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
+        bleAddress = field("BLE MAC（可选；默认已知 G3 地址）", "D0:EF:76:25:5D:CE")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
-        layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（已知设备默认值，可修改）", "D0EF76255DCC"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        layout.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
+        layout.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
-        layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
-        layout.addView(Button(this).apply { text="启动手机 HTTPS/MQTT 服务"; setOnClickListener { startLocalHttps() } })
+        layout.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
+        layout.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
         layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
         layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
@@ -71,7 +89,8 @@ class MainActivity : Activity() {
         root.addView(ScrollView(this).apply { addView(output) },
             LinearLayout.LayoutParams(-1,(180*resources.displayMetrics.density).toInt()))
         setContentView(root)
-        note("配网写入 Wi-Fi 与虚拟服务 IP；STA MAC 从 DHCP 列表读取。手机承载 HTTPS 8443 和 MQTT TLS 8883。")
+        note("G3 设备：SENSOR3_255DCC；BLE MAC D0:EF:76:25:5D:CE；Wi-Fi STA MAC D0EF76255DCC。")
+        note("完整流程：先启动手机 HTTPS/MQTT，再 BLE 配网；BLUFi 应答后发送配置，入网后由 MQTT 服务应答五项网关请求。")
         try {
             val bundled=G3FirmwareValidator.loadBundled(this)
             firmwareFile=bundled.first
@@ -121,7 +140,7 @@ class MainActivity : Activity() {
         if(requestCode==100) {
             val denied=permissions.indices.filter { grantResults.getOrNull(it)!=PackageManager.PERMISSION_GRANTED }
                 .map { permissions[it] }
-            if(denied.isEmpty()) {
+            if(grantResults.isNotEmpty() && denied.isEmpty()) {
                 note("BLE 权限已授予，自动开始扫描。")
                 handler.post { scan() }
             } else {
@@ -143,13 +162,17 @@ class MainActivity : Activity() {
             ?: try { result.device.name } catch(_:SecurityException) { null }
         val display=name?.takeIf { it.isNotBlank() } ?: "未命名设备"
         scanCount++
-        if(address.equals("D0:EF:76:25:5D:CE",true) &&
-            android.os.SystemClock.elapsedRealtime()-lastTargetRssiLog>3000) {
-            lastTargetRssiLog=android.os.SystemClock.elapsedRealtime()
-            note("已发现目标 G3：$display，RSSI=${result.rssi}")
+        val isTarget = address.equals("D0:EF:76:25:5D:CE",true) || display.startsWith("SENSOR3_",true)
+        if(isTarget) {
+            targetSeen=true
+            handler.removeCallbacks(targetScanFallbackRunnable)
+            if(android.os.SystemClock.elapsedRealtime()-lastTargetRssiLog>1500) {
+                lastTargetRssiLog=android.os.SystemClock.elapsedRealtime()
+                note("发现 G3 广播：$display，BLE=$address，RSSI=\${result.rssi}")
+            }
         }
         if(devices.put(address,result.device)==null) {
-            deviceLabels[address]="$display ($address, RSSI ${result.rssi})"
+            deviceLabels[address]="$display ($address, RSSI \${result.rssi})"
             runOnUiThread { refreshDevices() }
             if(scanCount==1) note("已收到 BLE 广播，正在列出设备。")
         }
@@ -163,6 +186,7 @@ class MainActivity : Activity() {
         override fun onScanFailed(errorCode:Int) {
             scanning=false
             handler.removeCallbacks(stopScanRunnable)
+            handler.removeCallbacks(targetScanFallbackRunnable)
             val reason=when(errorCode) {
                 SCAN_FAILED_ALREADY_STARTED -> "扫描已启动"
                 SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "系统 BLE 扫描注册失败"
@@ -176,9 +200,14 @@ class MainActivity : Activity() {
     private fun stopScanning() {
         if (!scanning) return
         scanning = false
+        handler.removeCallbacks(targetScanFallbackRunnable)
         try { manager.adapter.bluetoothLeScanner?.stopScan(scanner) }
         catch (e: Exception) { note("停止扫描异常: " + e.message) }
-        note("扫描结束：收到 $scanCount 条广播，发现 ${devices.size} 台设备")
+        note("扫描结束：收到 $scanCount 条广播，发现 \${devices.size} 台设备")
+        if(!targetSeen) {
+            if(scanCount==0) note("本轮没有收到任何 BLE 广播。请确认蓝牙/定位授权、系统定位开关及 G3 已短按后盖网络键进入配网状态。")
+            else note("收到了其他 BLE 设备，但未发现 G3 SENSOR3_255DCC（D0:EF:76:25:5D:CE）。已尝试全设备扫描及目标 MAC 过滤扫描。")
+        }
     }
     private fun scan() {
         if(scanning) {
@@ -198,16 +227,24 @@ class MainActivity : Activity() {
         refreshDevices()
         scanCount=0
         lastTargetRssiLog=0L
+        targetSeen=false
+        targetScanFallbackStarted=false
         try {
             val settings=ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+                .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
                 .setReportDelay(0L)
                 .build()
-            // Intentionally scan without filters: G3 advertisements may not expose a stable name.
-            bleScanner.startScan(null,settings,scanner)
+            activeScanSettings=settings
+            // First pass deliberately scans all advertisements; a target-MAC pass follows if needed.
             scanning=true
-            note("BLE 扫描已启动：全设备、无名称过滤、低延迟模式，持续 30 秒。")
+            bleScanner.startScan(null,settings,scanner)
+            note("BLE 全设备扫描已启动：目标 SENSOR3_255DCC / D0:EF:76:25:5D:CE，持续 30 秒。")
             handler.removeCallbacks(stopScanRunnable)
+            handler.removeCallbacks(targetScanFallbackRunnable)
+            handler.postDelayed(targetScanFallbackRunnable,10000)
             handler.postDelayed(stopScanRunnable,30000)
         } catch(e:SecurityException) {
             scanning=false
@@ -220,6 +257,20 @@ class MainActivity : Activity() {
             note("启动 BLE 扫描异常：" + e.javaClass.simpleName + ": " + e.message)
         }
     }
+    private fun startTargetScanFallback() {
+        if(!scanning || targetSeen || targetScanFallbackStarted) return
+        val bleScanner=try { manager.adapter.bluetoothLeScanner } catch(_:Exception) { null } ?: return
+        try {
+            bleScanner.stopScan(scanner)
+            val filter=ScanFilter.Builder().setDeviceAddress("D0:EF:76:25:5D:CE").build()
+            bleScanner.startScan(listOf(filter),activeScanSettings,scanner)
+            targetScanFallbackStarted=true
+            note("前 10 秒未发现 G3，已切换为目标 BLE MAC 精确扫描：D0:EF:76:25:5D:CE。")
+        } catch(e:Exception) {
+            note("G3 目标 MAC 二次扫描启动失败：" + e.javaClass.simpleName + ": " + e.message)
+        }
+    }
+
     private fun connect() {
         if(!permitted()) return
         val addr=devices.keys.elementAtOrNull(selector.selectedItemPosition) ?: return note("请先扫描")
