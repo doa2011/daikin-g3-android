@@ -125,7 +125,7 @@ class G3MigrationService:Service() {
             server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl);server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
-            broker?.stop();broker=G3MqttBroker(mac,gateway,id.ssl);broker?.start()
+            broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl) { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() };broker?.start()
             getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 + MQTT TLS 8883 running").apply()
         } catch(e:Exception) {
             getSharedPreferences("g3",0).edit().putString("service_state","ERROR: "+(e.message?:e.javaClass.simpleName)).apply()
