@@ -85,7 +85,8 @@ class MainActivity : Activity() {
     private fun requiredBlePermissions(): Array<String> =
         if(Build.VERSION.SDK_INT>=31) arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION
         ) else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
     private fun permitted(): Boolean {
