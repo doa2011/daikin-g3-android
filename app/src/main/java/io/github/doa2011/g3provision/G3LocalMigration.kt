@@ -99,6 +99,8 @@ class G3TlsIdentity(private val service:Service) {
 class G3MigrationService:Service() {
     private var server:G3HttpsServer?=null
     private var broker:G3MqttBroker?=null
+    private var cpuLock:android.os.PowerManager.WakeLock?=null
+    private var wifiLock:android.net.wifi.WifiManager.WifiLock?=null
     override fun onBind(i:Intent?):IBinder?=null
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
@@ -106,6 +108,11 @@ class G3MigrationService:Service() {
         val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 运行中；MQTT 集成开发中").setOngoing(true).build()
         startForeground(41,n)
         try {
+            val pm=getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            cpuLock=pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"G3Migration:CPU").apply{setReferenceCounted(false);acquire()}
+            val wm=applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            @Suppress("DEPRECATION")
+            wifiLock=wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,"G3Migration:WiFi").apply{setReferenceCounted(false);acquire()}
             val mac=(i?.getStringExtra(EXTRA_MAC)?: "").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(mac)){"请输入 G3 Wi-Fi STA MAC"}
             val origin=i?.getStringExtra(EXTRA_ORIGIN)?: ""
@@ -123,6 +130,6 @@ class G3MigrationService:Service() {
         }
         return START_NOT_STICKY
     }
-    override fun onDestroy(){broker?.stop();broker=null;server?.stop();server=null;super.onDestroy()}
+    override fun onDestroy(){broker?.stop();broker=null;server?.stop();server=null;try{if(cpuLock?.isHeld==true)cpuLock?.release()}catch(_:Exception){};try{if(wifiLock?.isHeld==true)wifiLock?.release()}catch(_:Exception){};cpuLock=null;wifiLock=null;super.onDestroy()}
     companion object { const val EXTRA_MAC="g3_device_mac";const val EXTRA_ORIGIN="g3_origin";const val EXTRA_GATEWAY="g3_gateway" }
 }
