@@ -68,11 +68,13 @@ class G3HttpsServer(port:Int, private val mac:String, private val origin:String,
 class G3TlsIdentity(private val service:Service) {
     private val dir=File(service.filesDir,"g3-local").apply{mkdirs()}
     private val pem=File(dir,"ca.pem");private val p12=File(dir,"identity.p12")
+    private val hostFile=File(dir,"certificate-host.txt")
     private val pass=("g3-"+service.packageName+"-private").toCharArray()
     data class Result(val ca:ByteArray,val ssl:SSLContext,val keyStorePath:String,val keyStorePassword:String)
     fun load(host:String):Result {
         if(Security.getProvider("BC")==null)Security.addProvider(BouncyCastleProvider())
-        if(!pem.exists()||!p12.exists())create(host)
+        if(!pem.exists()||!p12.exists()||!hostFile.exists())create(host)
+        require(hostFile.readText().trim()==host) { "手机 IP 已变化；为避免设备 CA 不一致，请固定 DHCP 地址或在重新配网前重置本地证书身份" }
         val ks=KeyStore.getInstance("PKCS12");p12.inputStream().use{ks.load(it,pass)}
         val km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());km.init(ks,pass)
         val ssl=SSLContext.getInstance("TLS");ssl.init(km.keyManagers,null,null)
@@ -105,7 +107,7 @@ class G3MigrationService:Service() {
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
-        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 运行中；MQTT 集成开发中").setOngoing(true).build()
+        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 18883 服务运行中").setOngoing(true).build()
         startForeground(41,n)
         try {
             val pm=getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
