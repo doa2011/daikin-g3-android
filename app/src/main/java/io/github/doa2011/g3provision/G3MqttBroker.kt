@@ -1,73 +1,208 @@
 package io.github.doa2011.g3provision
 
-import io.moquette.broker.Server
-import io.moquette.interception.InterceptHandler
-import io.moquette.interception.messages.*
-import io.netty.buffer.Unpooled
-import io.netty.handler.codec.mqtt.MqttMessageBuilders
-import io.netty.handler.codec.mqtt.MqttQoS
-import io.netty.util.CharsetUtil
-import io.netty.util.ReferenceCountUtil
 import org.json.JSONObject
-import java.util.Properties
+import org.json.JSONArray
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.EOFException
+import java.net.Socket
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLServerSocket
 
-/** Embedded TLS MQTT broker plus the five bounded factory-gateway compatibility acknowledgements. */
+/**
+ * Small MQTT 3.1.1 TLS broker for the bounded G3 migration workflow.
+ * Supports CONNECT, PUBLISH QoS 0/1, SUBSCRIBE, UNSUBSCRIBE, PINGREQ and DISCONNECT.
+ * It intentionally does not expose a general-purpose broker or enable OTA by itself.
+ */
 class G3MqttBroker(
     private val mac: String,
     private val gatewayMac: String,
-    private val keyStorePath: String,
-    private val keyStorePassword: String,
+    private val sslContext: SSLContext,
+    private val port: Int = 18883,
     private val weatherCode: Int = 1
 ) {
-    private val server = Server()
-    private val executor = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var running = false
+    private var listener: SSLServerSocket? = null
+    private val workers = Executors.newCachedThreadPool()
+    private val delayed = Executors.newSingleThreadScheduledExecutor()
+    private val clients = ConcurrentHashMap.newKeySet<Client>()
 
     fun start() {
-        val p = Properties().apply {
-            setProperty("host", "0.0.0.0")
-            setProperty("port", "disabled")
-            setProperty("ssl_port", "18883")
-            setProperty("jks_path", keyStorePath)
-            setProperty("key_store_type", "PKCS12")
-            setProperty("key_store_password", keyStorePassword)
-            setProperty("key_manager_password", keyStorePassword)
-            setProperty("ssl_provider", "JDK")
-            setProperty("allow_anonymous", "true")
-            setProperty("persistence_enabled", "false")
-            setProperty("telemetry_enabled", "false")
-        }
-        server.startServer(p, listOf(GatewayHandler()))
+        if (running) return
+        listener = sslContext.serverSocketFactory.createServerSocket(port) as SSLServerSocket
+        listener!!.needClientAuth = false
+        listener!!.enabledProtocols = listener!!.supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }.toTypedArray()
         running = true
+        workers.execute {
+            while (running) {
+                try {
+                    val socket = listener!!.accept()
+                    socket.soTimeout = 120000
+                    val client = Client(socket)
+                    clients.add(client)
+                    workers.execute { client.run() }
+                } catch (_: Exception) {
+                    if (running) { /* accept loop remains available for the next connection */ }
+                }
+            }
+        }
     }
 
     fun stop() {
         running = false
-        try { server.stopServer() } catch (_: Exception) {}
-        executor.shutdownNow()
+        try { listener?.close() } catch (_: Exception) {}
+        clients.toList().forEach { it.close() }
+        workers.shutdownNow()
+        delayed.shutdownNow()
     }
 
     fun isRunning() = running
 
-    private inner class GatewayHandler : InterceptHandler {
-        override fun getID() = "g3-android-gateway"
-        override fun getInterceptedMessageTypes(): Array<Class<*>> = arrayOf(InterceptPublishMessage::class.java)
-        override fun onConnect(msg: InterceptConnectMessage) {}
-        override fun onDisconnect(msg: InterceptDisconnectMessage) {}
-        override fun onConnectionLost(msg: InterceptConnectionLostMessage) {}
-        override fun onSubscribe(msg: InterceptSubscribeMessage) {}
-        override fun onUnsubscribe(msg: InterceptUnsubscribeMessage) {}
-        override fun onMessageAcknowledged(msg: InterceptAcknowledgedMessage) {}
-        override fun onSessionLoopError(error: Throwable) {}
-        override fun onPublish(msg: InterceptPublishMessage) {
-            val topic = msg.topicName
-            val payload = try { msg.payload().toString(CharsetUtil.UTF_8) } catch (_: Exception) { "" }
-            ReferenceCountUtil.release(msg.message())
-            if (!running || payload.length > 8192) return
+    private inner class Client(private val socket: Socket) {
+        private val input = DataInputStream(socket.getInputStream())
+        private val output = DataOutputStream(socket.getOutputStream())
+        private val subscriptions = ConcurrentHashMap.newKeySet<String>()
+        @Volatile private var active = true
+        var clientId: String = "unknown"
+
+        fun run() {
+            try {
+                while (active && running) {
+                    val header = input.read()
+                    if (header < 0) break
+                    val remaining = readRemainingLength(input)
+                    if (remaining < 0 || remaining > 1024 * 1024) break
+                    val body = ByteArray(remaining)
+                    input.readFully(body)
+                    handle(header, body)
+                }
+            } catch (_: EOFException) {
+            } catch (_: Exception) {
+            } finally { close() }
+        }
+
+        private fun handle(header: Int, body: ByteArray) {
+            when ((header ushr 4) and 0x0f) {
+                1 -> connect(body)
+                3 -> publish(header, body)
+                8 -> subscribe(body)
+                10 -> unsubscribe(body)
+                12 -> writePacket(0xD0, byteArrayOf())
+                14 -> close()
+                else -> { /* unsupported MQTT control packets are ignored */ }
+            }
+        }
+
+        private fun connect(body: ByteArray) {
+            val c = Cursor(body)
+            val protocol = c.readUtf8()
+            val level = c.readByte()
+            c.readByte() // connect flags
+            c.readUnsignedShort() // keep alive
+            if (protocol != "MQTT" || (level != 4 && level != 3)) {
+                writePacket(0x20, byteArrayOf(0, 1)); close(); return
+            }
+            clientId = c.readUtf8()
+            // Remaining will/user/password fields are intentionally ignored; upstream broker permits anonymous.
+            writePacket(0x20, byteArrayOf(0, 0))
+        }
+
+        private fun subscribe(body: ByteArray) {
+            val c = Cursor(body)
+            val packetId = c.readUnsignedShort()
+            val granted = ArrayList<Byte>()
+            while (c.remaining() > 0) {
+                val topic = c.readUtf8()
+                val qos = c.readByte()
+                if (topic.isNotBlank() && qos in 0..1) {
+                    subscriptions.add(topic)
+                    granted.add(qos.toByte())
+                } else granted.add(0x80.toByte())
+            }
+            val ack = byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()) + granted.toByteArray()
+            writePacket(0x90, ack)
+        }
+
+        private fun unsubscribe(body: ByteArray) {
+            val c = Cursor(body)
+            val packetId = c.readUnsignedShort()
+            while (c.remaining() > 0) subscriptions.remove(c.readUtf8())
+            writePacket(0xB0, byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()))
+        }
+
+        private fun publish(header: Int, body: ByteArray) {
+            val qos = (header ushr 1) and 0x03
+            if (qos > 1) return
+            val c = Cursor(body)
+            val topic = c.readUtf8()
+            val packetId = if (qos == 1) c.readUnsignedShort() else 0
+            val payload = c.readBytes(c.remaining())
+            if (qos == 1) writePacket(0x40, byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()))
             val responseTopic = responseTopic(topic) ?: return
-            executor.schedule({ acknowledge(topic, responseTopic, payload) }, 1500, TimeUnit.MILLISECONDS)
+            if (payload.size > 8192) return
+            val raw = String(payload, StandardCharsets.UTF_8)
+            delayed.schedule({ acknowledge(topic, responseTopic, raw) }, 1500, TimeUnit.MILLISECONDS)
+        }
+
+        fun sendPublish(topic: String, payload: String) {
+            val topicBytes = topic.toByteArray(StandardCharsets.UTF_8)
+            val data = payload.toByteArray(StandardCharsets.UTF_8)
+            val body = byteArrayOf((topicBytes.size ushr 8).toByte(), topicBytes.size.toByte()) + topicBytes + data
+            synchronized(output) {
+                writePacketLocked(0x30, body)
+            }
+        }
+
+        private fun writePacket(header: Int, body: ByteArray) {
+            synchronized(output) { writePacketLocked(header, body) }
+        }
+
+        private fun writePacketLocked(header: Int, body: ByteArray) {
+            if (!active) return
+            output.writeByte(header)
+            writeRemainingLength(output, body.size)
+            output.write(body)
+            output.flush()
+        }
+
+        fun close() {
+            if (!active) return
+            active = false
+            clients.remove(this)
+            try { socket.close() } catch (_: Exception) {}
+        }
+
+        fun accepts(topic: String): Boolean = subscriptions.any { topicMatches(it, topic) }
+    }
+
+    private fun acknowledge(requestTopic: String, responseTopic: String, raw: String) {
+        if (!running) return
+        try {
+            val request = JSONObject(raw)
+            val token = request.optString("client_token")
+            if (token.isBlank() || token.length > 128) return
+            val data = request.optJSONObject("data") ?: JSONObject()
+            if (requestTopic.endsWith("upload_snapshot")) {
+                if (data.optJSONObject("physics")?.optString("mac") != mac) return
+            } else if (data.optString("terminal_mac", gatewayMac) != gatewayMac) return
+
+            val responseData = when {
+                requestTopic.endsWith("/get_weather") -> JSONObject()
+                    .put("temperature", -100).put("humidity", 200)
+                    .put("pm25", -100).put("weatherCode", weatherCode)
+                requestTopic.endsWith("/get_filter_sensor3") -> JSONObject().put("filter_infos", JSONArray())
+                requestTopic.endsWith("/get_error_sensor3") -> JSONObject().put("error_infos", JSONArray())
+                else -> JSONObject()
+            }
+            val response = JSONObject().put("code", 0).put("data", responseData)
+                .put("client_token", token).put("timestamp", System.currentTimeMillis()).toString()
+            clients.filter { it.accepts(responseTopic) }.forEach { it.sendPublish(responseTopic, response) }
+        } catch (_: Exception) {
+            // Ignore malformed or unrelated factory messages.
         }
     }
 
@@ -86,34 +221,48 @@ class G3MqttBroker(
         }
     }
 
-    private fun acknowledge(requestTopic: String, responseTopic: String, raw: String) {
-        if (!running) return
-        try {
-            val request = JSONObject(raw)
-            val token = request.optString("client_token")
-            if (token.isBlank() || token.length > 128) return
-            val data = request.optJSONObject("data") ?: JSONObject()
-            if (requestTopic.endsWith("upload_snapshot")) {
-                val physicsMac = data.optJSONObject("physics")?.optString("mac")
-                if (physicsMac != mac) return
-            } else if (data.optString("terminal_mac", gatewayMac) != gatewayMac) return
-
-            val responseData = when {
-                requestTopic.endsWith("/get_weather") -> JSONObject()
-                    .put("temperature", -100).put("humidity", 200)
-                    .put("pm25", -100).put("weatherCode", weatherCode)
-                requestTopic.endsWith("/get_filter_sensor3") -> JSONObject().put("filter_infos", org.json.JSONArray())
-                requestTopic.endsWith("/get_error_sensor3") -> JSONObject().put("error_infos", org.json.JSONArray())
-                else -> JSONObject()
-            }
-            val response = JSONObject().put("code", 0).put("data", responseData)
-                .put("client_token", token).put("timestamp", System.currentTimeMillis()).toString()
-            val message = MqttMessageBuilders.publish().topicName(responseTopic)
-                .qos(MqttQoS.AT_MOST_ONCE)
-                .payload(Unpooled.copiedBuffer(response, CharsetUtil.UTF_8)).build()
-            server.internalPublish(message, "g3-android-gateway")
-        } catch (_: Exception) {
-            // Invalid or unrelated messages are deliberately ignored.
+    private fun topicMatches(filter: String, topic: String): Boolean {
+        val f = filter.split("/")
+        val t = topic.split("/")
+        var i = 0
+        while (i < f.size) {
+            if (f[i] == "#") return i == f.lastIndex
+            if (i >= t.size || (f[i] != "+" && f[i] != t[i])) return false
+            i++
         }
+        return i == t.size
+    }
+
+    private class Cursor(private val bytes: ByteArray) {
+        private var at = 0
+        fun remaining() = bytes.size - at
+        fun readByte(): Int { require(remaining() >= 1); return bytes[at++].toInt() and 255 }
+        fun readUnsignedShort(): Int { val a=readByte();val b=readByte();return (a shl 8) or b }
+        fun readBytes(n:Int):ByteArray { require(n>=0 && remaining()>=n);return bytes.copyOfRange(at,at+n).also{at+=n} }
+        fun readUtf8():String { val n=readUnsignedShort();return String(readBytes(n),StandardCharsets.UTF_8) }
+    }
+
+    private fun readRemainingLength(input: DataInputStream): Int {
+        var multiplier = 1
+        var value = 0
+        var count = 0
+        do {
+            val digit = input.readUnsignedByte()
+            value += (digit and 127) * multiplier
+            multiplier *= 128
+            count++
+            if (count > 4) return -1
+            if ((digit and 128) == 0) return value
+        } while (true)
+    }
+
+    private fun writeRemainingLength(out: DataOutputStream, length: Int) {
+        var value = length
+        do {
+            var digit = value % 128
+            value /= 128
+            if (value > 0) digit = digit or 128
+            out.writeByte(digit)
+        } while (value > 0)
     }
 }
