@@ -19,5 +19,4 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
-    implementation("com.github.moquette-io.moquette:moquette-broker:0.18.2")
 }
