@@ -81,7 +81,12 @@ class G3HttpsServer(port:Int, private val mac:String, private val origin:String,
     private fun body(s:IHTTPSession):JSONObject { val m=HashMap<String,String>();s.parseBody(m);val x=m["postData"]?: "";require(x.toByteArray().size in 1..4096);return JSONObject(x) }
     private fun denied()=newFixedLengthResponse(Response.Status.FORBIDDEN,"application/json","{\"errcode\":1,\"data\":{}}")
     private fun reply(j:JSONObject):Response { val b=j.toString().toByteArray();return newFixedLengthResponse(Response.Status.OK,"application/json",b.inputStream(),b.size.toLong()).apply{addHeader("Cache-Control","no-store")} }
-    private fun binary(b:ByteArray):Response=newFixedLengthResponse(Response.Status.OK,"application/octet-stream",b.inputStream(),b.size.toLong()).apply{addHeader("Cache-Control","no-store")}
+    private fun binary(b:ByteArray):Response {
+        val stream=object:java.io.ByteArrayInputStream(b) {
+            override fun read(buffer:ByteArray, offset:Int, length:Int):Int = super.read(buffer,offset,minOf(length,2048))
+        }
+        return newFixedLengthResponse(Response.Status.OK,"application/octet-stream",stream,b.size.toLong()).apply{addHeader("Cache-Control","no-store")}
+    }
     companion object {
         fun stockPassword(mac:String):String {
             var crc=0
