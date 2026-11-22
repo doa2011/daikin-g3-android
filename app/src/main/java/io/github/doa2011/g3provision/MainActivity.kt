@@ -36,7 +36,7 @@ class MainActivity : Activity() {
     private lateinit var bleAddress: EditText
     private lateinit var ssid: EditText
     private lateinit var password: EditText
-    private lateinit var host: EditText
+    private lateinit var host: EditText\n    private lateinit var phoneIp: EditText
     private lateinit var deviceStaMac: EditText
     private lateinit var mac: EditText
     private lateinit var output: TextView
@@ -48,7 +48,7 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("手机 Wi-Fi IPv4（迁移服务地址，可手动修改）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
@@ -194,14 +194,14 @@ class MainActivity : Activity() {
         try {
             val ip = host.text.toString().trim()
             val parts = ip.split(".")
-            require(parts.size == 4 && parts.all { it.toIntOrNull() in 0..255 }) { "手机 Wi-Fi IPv4 无效" }
+            require(parts.size == 4 && parts.all { it.toIntOrNull() in 0..255 }) { "虚拟服务 IPv4 无效" }\n            require(phoneParts.size == 4 && phoneParts.all { it.toIntOrNull() in 0..255 }) { "手机 Wi-Fi IPv4 无效" }\n            require(phone != ip) { "手机 IP 与虚拟服务 IP 应不同；请使用路由器 IP 作为虚拟服务 IP" }
             val sta = deviceStaMac.text.toString().trim().replace(":", "").replace("-", "").uppercase()
             require(Regex("[0-9A-F]{12}").matches(sta)) { "请填写 G3 的 Wi-Fi STA MAC，不是 BLE MAC" }
             val intent = android.content.Intent(this, G3MigrationService::class.java)
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
                 .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + ip)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-            note("已请求启动手机 HTTPS 服务；HTTPS 与 MQTT 服务启动请求已提交；OTA 仍未启用。")
+            note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 需将虚拟服务 IP 的 TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 仍未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
     }
 
