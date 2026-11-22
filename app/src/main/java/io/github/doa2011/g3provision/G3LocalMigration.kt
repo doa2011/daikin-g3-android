@@ -20,10 +20,13 @@ import java.util.Date
 import javax.net.ssl.*
 
 /** Android-hosted HTTPS compatibility server. OTA is deliberately disabled in this first milestone. */
-data class G3FirmwareImage(val bytes:ByteArray,val version:String,val md5:String)
+data class G3FirmwareImage(val bytes:ByteArray,val version:String,val md5:String,val sha256:String)
 
 object G3FirmwareValidator {
-    fun load(file:File, version:String):G3FirmwareImage {
+    const val BUNDLED_OTA_VERSION = "V99.00.00"
+    private const val BUNDLED_ASSET = "g3/daikin_BRY88BBA15G.ota.bin.raw"
+
+    fun load(file:File, version:String, expectedSha256:String?=null):G3FirmwareImage {
         require(version.matches(Regex("[A-Za-z0-9_.-]{1,31}"))) { "固件版本号格式无效" }
         val raw=file.readBytes()
         require(raw.size in 32..0x1E0000) { "固件大小不在 32..1966080 字节范围内" }
@@ -35,7 +38,38 @@ object G3FirmwareValidator {
         require(raw.copyOfRange(288,320).contentEquals(model)) { "固件型号不匹配：需要 BRY88BBA15G" }
         require(raw.copyOfRange(320,352).contentEquals(product)) { "固件不是 G3 full application" }
         val md5=MessageDigest.getInstance("MD5").digest(raw).joinToString("") { "%02x".format(it.toInt() and 255) }
-        return G3FirmwareImage(raw,version,md5)
+        val sha256=MessageDigest.getInstance("SHA-256").digest(raw).joinToString("") { "%02x".format(it.toInt() and 255) }
+        if(expectedSha256!=null) require(sha256.equals(expectedSha256,true)) { "固件 SHA256 与内置发布清单不一致" }
+        return G3FirmwareImage(raw,version,md5,sha256)
+    }
+
+    fun loadBundled(context:android.content.Context):Pair<File,G3FirmwareImage> {
+        val props=java.util.Properties()
+        context.assets.open("g3/firmware.properties").use { props.load(it) }
+        val release=props.getProperty("release") ?: error("缺少固件发布版本")
+        val artifact=props.getProperty("artifact") ?: error("缺少固件文件名")
+        val version=props.getProperty("ota_version") ?: error("缺少 OTA 版本标签")
+        val model=props.getProperty("device_model") ?: error("缺少固件型号")
+        val deviceType=props.getProperty("device_type") ?: error("缺少设备类型")
+        val variant=props.getProperty("variant") ?: error("缺少固件变体")
+        val expectedSize=props.getProperty("size")?.toLongOrNull() ?: error("固件大小元数据无效")
+        val expectedSha=props.getProperty("sha256") ?: error("缺少固件 SHA256")
+        require(release=="v1.0.0-rc.7" && artifact=="daikin_BRY88BBA15G.ota.bin.raw" &&
+            model=="BRY88BBA15G" && deviceType=="SENSOR3_ESP32" && variant=="full") {
+            "内置固件发布信息与目标设备不匹配"
+        }
+        val target=File(context.filesDir,"g3-local/$artifact")
+        target.parentFile?.mkdirs()
+        if(!target.exists() || target.length()!=expectedSize) {
+            val tmp=File(target.parentFile,target.name+".tmp")
+            context.assets.open(BUNDLED_ASSET).use { input -> tmp.outputStream().use { output -> input.copyTo(output) } }
+            require(tmp.length()==expectedSize) { "内置固件文件大小不匹配" }
+            if(target.exists()) target.delete()
+            require(tmp.renameTo(target)) { "无法写入内置固件缓存" }
+        }
+        val image=load(target,version,expectedSha)
+        require(image.bytes.size.toLong()==expectedSize) { "固件大小与发布清单不一致" }
+        return target to image
     }
 }
 
@@ -240,7 +274,7 @@ class G3MigrationService:Service() {
             val id=G3TlsIdentity(this).load(host)
             val firmwarePath=i?.getStringExtra(EXTRA_FIRMWARE_PATH).orEmpty()
             val version=i?.getStringExtra(EXTRA_VERSION).orEmpty()
-            firmware=if(firmwarePath.isNotBlank()) G3FirmwareValidator.load(File(firmwarePath),version) else null
+            firmware=if(firmwarePath.isNotBlank()) G3FirmwareValidator.load(File(firmwarePath),version,i?.getStringExtra(EXTRA_FIRMWARE_SHA256)) else null
             server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
@@ -258,6 +292,7 @@ class G3MigrationService:Service() {
         const val EXTRA_ORIGIN="g3_origin"
         const val EXTRA_GATEWAY="g3_gateway"
         const val EXTRA_FIRMWARE_PATH="g3_firmware_path"
+        const val EXTRA_FIRMWARE_SHA256="g3_firmware_sha256"
         const val EXTRA_VERSION="g3_firmware_version"
         const val EXTRA_TRIGGER_OTA="g3_trigger_ota"
     }
