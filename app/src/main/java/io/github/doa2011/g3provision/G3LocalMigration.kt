@@ -19,7 +19,7 @@ import java.util.Base64
 import java.util.Date
 import javax.net.ssl.*
 
-/** Android-hosted HTTPS compatibility server. OTA is deliberately disabled in this first milestone. */
+/** Android-hosted HTTPS compatibility server with a verified, optional G3 ESP32 OTA image. */
 data class G3FirmwareImage(val bytes:ByteArray,val version:String,val md5:String,val sha256:String)
 
 object G3FirmwareValidator {
