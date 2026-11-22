@@ -48,7 +48,8 @@ class MainActivity : Activity() {
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20,20,20,20) }
+        val root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        val layout = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,12,20,12) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
@@ -62,8 +63,14 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
         layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
         layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
-        output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout)
+        root.addView(ScrollView(this).apply {
+            isFillViewport=true
+            addView(layout)
+        },LinearLayout.LayoutParams(-1,0,1f))
+        output=TextView(this).apply { textSize=12f; setPadding(16,8,16,8) }
+        root.addView(ScrollView(this).apply { addView(output) },
+            LinearLayout.LayoutParams(-1,(180*resources.displayMetrics.density).toInt()))
+        setContentView(root)
         note("配网写入 Wi-Fi 与虚拟服务 IP；STA MAC 从 DHCP 列表读取。手机承载 HTTPS 8443 和 MQTT TLS 8883。")
         try {
             val bundled=G3FirmwareValidator.loadBundled(this)
