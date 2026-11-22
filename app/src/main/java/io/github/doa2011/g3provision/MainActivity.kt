@@ -36,7 +36,8 @@ class MainActivity : Activity() {
     private lateinit var bleAddress: EditText
     private lateinit var ssid: EditText
     private lateinit var password: EditText
-    private lateinit var host: EditText\n    private lateinit var phoneIp: EditText
+    private lateinit var host: EditText
+    private lateinit var phoneIp: EditText
     private lateinit var deviceStaMac: EditText
     private lateinit var mac: EditText
     private lateinit var output: TextView
