@@ -128,10 +128,17 @@ class G3TlsIdentity(private val service:Service) {
 class G3MigrationService:Service() {
     private var server:G3HttpsServer?=null
     private var broker:G3MqttBroker?=null
+    private var firmware:G3FirmwareImage?=null
     private var cpuLock:android.os.PowerManager.WakeLock?=null
     private var wifiLock:android.net.wifi.WifiManager.WifiLock?=null
     override fun onBind(i:Intent?):IBinder?=null
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
+        if (i?.getBooleanExtra(EXTRA_TRIGGER_OTA,false)==true) {
+            val version=i.getStringExtra(EXTRA_VERSION).orEmpty()
+            val ok=firmware!=null && firmware?.version==version && broker?.triggerEsp32Upgrade(version)==true
+            getSharedPreferences("g3",0).edit().putString("ota_state",if(ok) "ESP32 OTA command sent once" else "OTA blocked: firmware missing, gateway replies incomplete, or device not subscribed").apply()
+            return START_NOT_STICKY
+        }
         val channel="g3-local-migration"
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
         val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 8883 服务运行中").setOngoing(true).build()
@@ -148,7 +155,10 @@ class G3MigrationService:Service() {
             require(origin.startsWith("https://")){"origin 必须为 https:// 开头"}
             val host=java.net.URI(origin).host ?: throw IllegalArgumentException("origin host invalid")
             val id=G3TlsIdentity(this).load(host)
-            server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl);server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
+            val firmwarePath=i?.getStringExtra(EXTRA_FIRMWARE_PATH).orEmpty()
+            val version=i?.getStringExtra(EXTRA_VERSION).orEmpty()
+            firmware=if(firmwarePath.isNotBlank()) G3FirmwareValidator.load(File(firmwarePath),version) else null
+            server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl) { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() };broker?.start()
@@ -160,5 +170,12 @@ class G3MigrationService:Service() {
         return START_NOT_STICKY
     }
     override fun onDestroy(){broker?.stop();broker=null;server?.stop();server=null;try{if(cpuLock?.isHeld==true)cpuLock?.release()}catch(_:Exception){};try{if(wifiLock?.isHeld==true)wifiLock?.release()}catch(_:Exception){};cpuLock=null;wifiLock=null;super.onDestroy()}
-    companion object { const val EXTRA_MAC="g3_device_mac";const val EXTRA_ORIGIN="g3_origin";const val EXTRA_GATEWAY="g3_gateway" }
+    companion object {
+        const val EXTRA_MAC="g3_device_mac"
+        const val EXTRA_ORIGIN="g3_origin"
+        const val EXTRA_GATEWAY="g3_gateway"
+        const val EXTRA_FIRMWARE_PATH="g3_firmware_path"
+        const val EXTRA_VERSION="g3_firmware_version"
+        const val EXTRA_TRIGGER_OTA="g3_trigger_ota"
+    }
 }
