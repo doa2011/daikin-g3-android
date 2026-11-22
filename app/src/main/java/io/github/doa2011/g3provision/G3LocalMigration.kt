@@ -69,14 +69,14 @@ class G3TlsIdentity(private val service:Service) {
     private val dir=File(service.filesDir,"g3-local").apply{mkdirs()}
     private val pem=File(dir,"ca.pem");private val p12=File(dir,"identity.p12")
     private val pass=("g3-"+service.packageName+"-private").toCharArray()
-    data class Result(val ca:ByteArray,val ssl:SSLContext)
+    data class Result(val ca:ByteArray,val ssl:SSLContext,val keyStorePath:String,val keyStorePassword:String)
     fun load(host:String):Result {
         if(Security.getProvider("BC")==null)Security.addProvider(BouncyCastleProvider())
         if(!pem.exists()||!p12.exists())create(host)
         val ks=KeyStore.getInstance("PKCS12");p12.inputStream().use{ks.load(it,pass)}
         val km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());km.init(ks,pass)
         val ssl=SSLContext.getInstance("TLS");ssl.init(km.keyManagers,null,null)
-        return Result(pem.readBytes(),ssl)
+        return Result(pem.readBytes(),ssl,p12.absolutePath,String(pass))
     }
     private fun create(host:String) {
         val kg=KeyPairGenerator.getInstance("RSA");kg.initialize(2048);val kp=kg.generateKeyPair()
@@ -98,6 +98,7 @@ class G3TlsIdentity(private val service:Service) {
 /** Keeps the local HTTPS endpoint alive while Android backgrounds the UI. */
 class G3MigrationService:Service() {
     private var server:G3HttpsServer?=null
+    private var broker:G3MqttBroker?=null
     override fun onBind(i:Intent?):IBinder?=null
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
@@ -112,13 +113,16 @@ class G3MigrationService:Service() {
             val host=java.net.URI(origin).host ?: throw IllegalArgumentException("origin host invalid")
             val id=G3TlsIdentity(this).load(host)
             server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl);server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
-            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 running; MQTT pending").apply()
+            val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
+            require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
+            broker?.stop();broker=G3MqttBroker(mac,gateway,id.keyStorePath,id.keyStorePassword);broker?.start()
+            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 + MQTT TLS 18883 running").apply()
         } catch(e:Exception) {
             getSharedPreferences("g3",0).edit().putString("service_state","ERROR: "+(e.message?:e.javaClass.simpleName)).apply()
             stopSelf()
         }
         return START_NOT_STICKY
     }
-    override fun onDestroy(){server?.stop();server=null;super.onDestroy()}
-    companion object { const val EXTRA_MAC="g3_device_mac";const val EXTRA_ORIGIN="g3_origin" }
+    override fun onDestroy(){broker?.stop();broker=null;server?.stop();server=null;super.onDestroy()}
+    companion object { const val EXTRA_MAC="g3_device_mac";const val EXTRA_ORIGIN="g3_origin";const val EXTRA_GATEWAY="g3_gateway" }
 }
