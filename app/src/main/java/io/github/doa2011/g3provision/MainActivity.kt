@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.location.LocationManager
 import android.widget.*
 import java.util.UUID
 
@@ -74,37 +75,94 @@ class MainActivity : Activity() {
             note("内置 G3 固件不可用：" + (e.message ?: e.javaClass.simpleName) + "。请重新安装完整 APK。")
         }
     }
+    private fun requiredBlePermissions(): Array<String> =
+        if(Build.VERSION.SDK_INT>=31) arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT
+        ) else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
     private fun permitted(): Boolean {
-        val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
-            else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        val missing=p.filter { checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED }
-        if(missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(),100); return false }
+        val missing=requiredBlePermissions().filter {
+            checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED
+        }
+        if(missing.isNotEmpty()) {
+            note("正在申请 BLE 所需权限：" + missing.joinToString())
+            requestPermissions(missing.toTypedArray(),100)
+            return false
+        }
+        if(Build.VERSION.SDK_INT<31) {
+            val lm=getSystemService(LOCATION_SERVICE) as LocationManager
+            val locationOn=try {
+                if(Build.VERSION.SDK_INT>=28) lm.isLocationEnabled
+                else @Suppress("DEPRECATION") (lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                    lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER))
+            } catch(_:Exception) { false }
+            if(!locationOn) {
+                note("Android 6–11 扫描 BLE 需要开启系统定位服务；请打开定位后重新扫描。")
+                return false
+            }
+        }
         return true
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onRequestPermissionsResult(
+        requestCode:Int, permissions:Array<out String>, grantResults:IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
+        if(requestCode==100) {
+            val denied=permissions.indices.filter { grantResults.getOrNull(it)!=PackageManager.PERMISSION_GRANTED }
+                .map { permissions[it] }
+            if(denied.isEmpty()) {
+                note("BLE 权限已授予，自动开始扫描。")
+                handler.post { scan() }
+            } else {
+                note("BLE 权限未授予：" + denied.joinToString() + "。请在系统设置中允许附近设备权限。")
+            }
+        }
     }
     private fun refreshDevices() {
         val selected = selector.selectedItemPosition
         selector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, deviceLabels.values.toList())
         if (selected >= 0 && selected < deviceLabels.size) selector.setSelection(selected)
     }
-    private val scanner=object: ScanCallback() {
-        override fun onScanResult(callbackType:Int,result:ScanResult) {
-            val address = result.device.address
-            val name = result.scanRecord?.deviceName
-                ?: try { result.device.name } catch (_: SecurityException) { null }
-            val display = name?.takeIf { it.isNotBlank() } ?: "未命名设备"
-            scanCount++
-            if (address.equals("D0:EF:76:25:5D:CE", true) && android.os.SystemClock.elapsedRealtime() - lastTargetRssiLog > 3000) {
-                lastTargetRssiLog = android.os.SystemClock.elapsedRealtime()
-                note("已发现目标 G3：$display，RSSI=${result.rssi}")
-            }
-            if (devices.put(address, result.device) == null) {
-                deviceLabels[address] = "$display ($address, RSSI ${result.rssi})"
-                runOnUiThread { refreshDevices() }
-            }
+    private fun recordScanResult(result:ScanResult) {
+        val address=try { result.device.address } catch(e:SecurityException) {
+            note("读取 BLE 地址失败：缺少 BLUETOOTH_SCAN 权限")
+            return
         }
-        override fun onScanFailed(errorCode: Int) {
-            scanning = false
-            note("扫描失败，错误码=$errorCode")
+        val name=result.scanRecord?.deviceName
+            ?: try { result.device.name } catch(_:SecurityException) { null }
+        val display=name?.takeIf { it.isNotBlank() } ?: "未命名设备"
+        scanCount++
+        if(address.equals("D0:EF:76:25:5D:CE",true) &&
+            android.os.SystemClock.elapsedRealtime()-lastTargetRssiLog>3000) {
+            lastTargetRssiLog=android.os.SystemClock.elapsedRealtime()
+            note("已发现目标 G3：$display，RSSI=${result.rssi}")
+        }
+        if(devices.put(address,result.device)==null) {
+            deviceLabels[address]="$display ($address, RSSI ${result.rssi})"
+            runOnUiThread { refreshDevices() }
+            if(scanCount==1) note("已收到 BLE 广播，正在列出设备。")
+        }
+    }
+
+    private val scanner=object: ScanCallback() {
+        override fun onScanResult(callbackType:Int,result:ScanResult) = recordScanResult(result)
+        override fun onBatchScanResults(results:MutableList<ScanResult>) {
+            results.forEach { recordScanResult(it) }
+        }
+        override fun onScanFailed(errorCode:Int) {
+            scanning=false
+            handler.removeCallbacks(stopScanRunnable)
+            val reason=when(errorCode) {
+                SCAN_FAILED_ALREADY_STARTED -> "扫描已启动"
+                SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "系统 BLE 扫描注册失败"
+                SCAN_FAILED_INTERNAL_ERROR -> "Android 蓝牙栈内部错误"
+                SCAN_FAILED_FEATURE_UNSUPPORTED -> "设备不支持该扫描功能"
+                else -> "未知扫描错误"
+            }
+            note("BLE 扫描失败：$reason（错误码=$errorCode）。请检查蓝牙开关、权限及系统蓝牙服务。")
         }
     }
     private fun stopScanning() {
@@ -115,26 +173,43 @@ class MainActivity : Activity() {
         note("扫描结束：收到 $scanCount 条广播，发现 ${devices.size} 台设备")
     }
     private fun scan() {
-        if (!permitted()) { note("请先授予附近设备权限，再点击扫描"); return }
-        if (!manager.adapter.isEnabled) { note("请先打开蓝牙"); return }
-        stopScanning()
+        if(scanning) {
+            note("BLE 扫描已经进行中。")
+            return
+        }
+        if(!permitted()) return
+        val adapter=try { manager.adapter } catch(e:Exception) {
+            note("无法取得 Android BluetoothAdapter：" + e.message)
+            return
+        }
+        if(adapter==null) return note("此手机没有 BluetoothAdapter")
+        if(!adapter.isEnabled) return note("手机蓝牙未开启，请先打开蓝牙后重新扫描")
+        val bleScanner=adapter.bluetoothLeScanner ?: return note("系统 BLE Scanner 不可用；请确认手机支持 BLE 且蓝牙已开启")
         devices.clear()
         deviceLabels.clear()
         refreshDevices()
-        scanCount = 0
-        val bleScanner = manager.adapter.bluetoothLeScanner ?: return note("BLE 扫描器不可用")
+        scanCount=0
+        lastTargetRssiLog=0L
         try {
-            scanning = true
-            val settings = ScanSettings.Builder()
+            val settings=ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setReportDelay(0L)
                 .build()
-            bleScanner.startScan(null, settings, scanner)
-            note("扫描全部 BLE 设备 20 秒；不再按 SENSOR3_ 名称过滤")
+            // Intentionally scan without filters: G3 advertisements may not expose a stable name.
+            bleScanner.startScan(null,settings,scanner)
+            scanning=true
+            note("BLE 扫描已启动：全设备、无名称过滤、低延迟模式，持续 30 秒。")
             handler.removeCallbacks(stopScanRunnable)
-            handler.postDelayed(stopScanRunnable, 20000)
-        } catch (e: Exception) {
-            scanning = false
-            note("启动扫描异常: " + e.message)
+            handler.postDelayed(stopScanRunnable,30000)
+        } catch(e:SecurityException) {
+            scanning=false
+            note("系统拒绝 BLE 扫描：" + e.message + "。请检查附近设备权限。")
+        } catch(e:IllegalStateException) {
+            scanning=false
+            note("蓝牙服务当前不可用：" + e.message)
+        } catch(e:Exception) {
+            scanning=false
+            note("启动 BLE 扫描异常：" + e.javaClass.simpleName + ": " + e.message)
         }
     }
     private fun connect() {
