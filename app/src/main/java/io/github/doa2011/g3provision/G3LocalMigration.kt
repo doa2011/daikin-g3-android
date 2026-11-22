@@ -141,6 +141,7 @@ class G3MigrationService:Service() {
             val version=i.getStringExtra(EXTRA_VERSION).orEmpty()
             val ok=firmware!=null && firmware?.version==version && broker?.triggerEsp32Upgrade(version)==true
             getSharedPreferences("g3",0).edit().putString("ota_state",if(ok) "ESP32 OTA command sent once" else "OTA blocked: firmware missing, gateway replies incomplete, or device not subscribed").apply()
+            if (broker==null) stopSelf()
             return START_NOT_STICKY
         }
         try {
