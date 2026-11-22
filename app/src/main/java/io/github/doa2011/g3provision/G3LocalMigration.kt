@@ -38,7 +38,7 @@ object G3FirmwareValidator {
     }
 }
 
-class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext, private val firmware:G3FirmwareImage?=null):NanoHTTPD("0.0.0.0",port) {
+class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext, private val firmware:G3FirmwareImage?=null, private val updateReady:()->Boolean={false}):NanoHTTPD("0.0.0.0",port) {
     private val token=java.util.UUID.randomUUID().toString().replace("-","")+java.util.UUID.randomUUID().toString().take(16)
     init { makeSecure(ssl.serverSocketFactory,null) }
     override fun serve(s:IHTTPSession):Response = try {
@@ -68,7 +68,7 @@ class G3HttpsServer(port:Int, private val mac:String, private val origin:String,
                 val b=body(s)
                 if(s.headers["token"]!=token || b.optString("deviceId")!=mac) denied()
                 else {
-                    val offer=firmware!=null && b.optString("deviceType")=="SENSOR3_ESP32" && b.optString("firmwareVersion")!=firmware.version
+                    val offer=firmware!=null && updateReady() && b.optString("deviceType")=="SENSOR3_ESP32" && b.optString("firmwareVersion")!=firmware.version
                     val data=JSONObject().put("haveNewVersion",if(offer) 1 else 0)
                     if(offer) data.put("firmware",JSONObject().put("version",firmware!!.version)
                         .put("s3Url",origin+"/firmware/bry88-esp32-app.bin").put("md5",firmware.md5))
