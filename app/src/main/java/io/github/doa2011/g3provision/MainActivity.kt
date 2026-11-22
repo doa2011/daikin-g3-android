@@ -221,7 +221,9 @@ class MainActivity : Activity() {
             val intent = android.content.Intent(this, G3MigrationService::class.java)
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
                 .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + virtualIp)
-                .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)\n                .putExtra(G3MigrationService.EXTRA_FIRMWARE_PATH, firmwareFile?.absolutePath ?: "")\n                .putExtra(G3MigrationService.EXTRA_VERSION, firmwareVersion.text.toString().trim())
+                .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)
+                .putExtra(G3MigrationService.EXTRA_FIRMWARE_PATH, firmwareFile?.absolutePath ?: "")
+                .putExtra(G3MigrationService.EXTRA_VERSION, firmwareVersion.text.toString().trim())
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
             note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 尚未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
