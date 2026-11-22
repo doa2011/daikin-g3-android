@@ -21,10 +21,10 @@ import sys
 p=Path(sys.argv[1])
 b=p.read_bytes()
 assert len(b)==1288544, f"unexpected size: {len(b)}"
-assert b[0]==0xE9 and 1<=b[1]<=16 and b[12:14]==b"\\0\\0", "not an ESP32 raw application"
+assert b[0]==0xE9 and 1<=b[1]<=16 and b[12:14]==bytes([0,0]), "not an ESP32 raw application"
 assert b[32:36]==bytes.fromhex("3254cdab"), "missing upstream G3 application marker"
-assert b[288:320]==b"BRY88BBA15G".ljust(32,b"\\0"), "wrong G3 model"
-assert b[320:352]==b"PHICOMM-DAIKIN-1:full".ljust(32,b"\\0"), "wrong G3 full application variant"
+assert b[288:320]==b"BRY88BBA15G".ljust(32,bytes([0])), "wrong G3 model"
+assert b[320:352]==b"PHICOMM-DAIKIN-1:full".ljust(32,bytes([0])), "wrong G3 full application variant"
 PY
 
 mv "$TMP" "$DEST"
