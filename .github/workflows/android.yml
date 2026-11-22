@@ -20,6 +20,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Download and verify upstream G3 ESP32 OTA image
+        run: bash scripts/prepare_g3_firmware.sh
+      - name: Run BLUFi and Android unit tests
+        run: gradle --no-daemon :app:testDebugUnitTest
       - run: gradle --no-daemon :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
