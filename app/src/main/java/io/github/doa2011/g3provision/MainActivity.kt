@@ -48,7 +48,7 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("手机 Wi-Fi IPv4（迁移服务地址）"); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("手机 Wi-Fi IPv4（迁移服务地址，可手动修改）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
@@ -178,6 +178,16 @@ class MainActivity : Activity() {
         if(Build.VERSION.SDK_INT>=33) g.writeCharacteristic(c,frame,BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         else { @Suppress("DEPRECATION") c.value=frame
             @Suppress("DEPRECATION") g.writeCharacteristic(c) }
+    }
+
+
+    @Suppress("DEPRECATION")
+    private fun currentWifiIpv4(): String {
+        return try {
+            val wifi = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+            val ip = wifi.connectionInfo.ipAddress
+            if (ip == 0) "" else listOf(ip and 255, (ip shr 8) and 255, (ip shr 16) and 255, (ip shr 24) and 255).joinToString(".")
+        } catch (_: Exception) { "" }
     }
 
     private fun startLocalHttps() {
