@@ -39,7 +39,7 @@ class MainActivity : Activity() {
     private lateinit var host: EditText
     private lateinit var phoneIp: EditText
     private lateinit var deviceStaMac: EditText
-    private lateinit var mac: EditText
+    private lateinit var mac: EditText\n    private lateinit var firmwareVersion: EditText\n    private var firmwareFile: java.io.File? = null
     private lateinit var output: TextView
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,13 +49,13 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("目标 ESP32 固件版本（如 1.2.3）")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="启动手机 HTTPS/MQTT 服务"; setOnClickListener { startLocalHttps() } })
-        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
+        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })\n        layout.addView(Button(this).apply { text="选择 G3 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })\n        layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写手机 Wi-Fi IPv4；STA MAC 从路由器 DHCP 列表读取（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
     }
@@ -217,7 +217,7 @@ class MainActivity : Activity() {
             val intent = android.content.Intent(this, G3MigrationService::class.java)
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
                 .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + virtualIp)
-                .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)
+                .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)\n                .putExtra(G3MigrationService.EXTRA_FIRMWARE_PATH, firmwareFile?.absolutePath ?: "")\n                .putExtra(G3MigrationService.EXTRA_VERSION, firmwareVersion.text.toString().trim())
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
             note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 尚未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
@@ -229,6 +229,51 @@ class MainActivity : Activity() {
         val expected = listOf("snapshot_upload", "get_weather", "login_ipbox", "get_filter_sensor3", "get_error_sensor3")
         val lines = expected.map { name -> (if (acks.any { it.endsWith(name) }) "✓ " else "○ ") + name }
         note("网关应答进度 " + acks.size + "/5\n" + lines.joinToString("\n"))
+    }
+
+
+    private fun chooseFirmware() {
+        val version = firmwareVersion.text.toString().trim()
+        if (!version.matches(Regex("[A-Za-z0-9_.-]{1,31}"))) {
+            note("请先填写目标固件版本号，再选择固件文件。")
+            return
+        }
+        val intent = android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            .setType("application/octet-stream")
+        startActivityForResult(intent, 301)
+    }
+
+    private fun triggerOta() {
+        val version = firmwareVersion.text.toString().trim()
+        if (firmwareFile == null || !firmwareFile!!.exists()) {
+            note("尚未选择并验证 G3 ESP32 raw 固件。")
+            return
+        }
+        val intent = android.content.Intent(this, G3MigrationService::class.java)
+            .putExtra(G3MigrationService.EXTRA_TRIGGER_OTA, true)
+            .putExtra(G3MigrationService.EXTRA_VERSION, version)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+        note("已提交一次 OTA 请求；服务端将检查固件、五项网关应答和设备订阅状态，不满足条件则拒绝发送。")
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 301 || resultCode != RESULT_OK || data?.data == null) return
+        try {
+            val dst = java.io.File(filesDir, "selected-g3-esp32.bin")
+            contentResolver.openInputStream(data.data!!).use { input ->
+                requireNotNull(input) { "无法读取所选固件" }
+                dst.outputStream().use { output -> input.copyTo(output) }
+            }
+            val image = G3FirmwareValidator.load(dst, firmwareVersion.text.toString().trim())
+            firmwareFile = dst
+            note("G3 ESP32 固件验证通过：大小=" + image.bytes.size + "，版本=" + image.version + "，MD5=" + image.md5)
+        } catch (e: Exception) {
+            firmwareFile = null
+            note("固件拒绝：" + (e.message ?: e.javaClass.simpleName))
+        }
     }
 
     private fun provision() {
