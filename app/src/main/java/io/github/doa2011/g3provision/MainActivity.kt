@@ -39,7 +39,9 @@ class MainActivity : Activity() {
     private lateinit var host: EditText
     private lateinit var phoneIp: EditText
     private lateinit var deviceStaMac: EditText
-    private lateinit var mac: EditText\n    private lateinit var firmwareVersion: EditText\n    private var firmwareFile: java.io.File? = null
+    private lateinit var mac: EditText
+    private lateinit var firmwareVersion: EditText
+    private var firmwareFile: java.io.File? = null
     private lateinit var output: TextView
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,9 +57,11 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="启动手机 HTTPS/MQTT 服务"; setOnClickListener { startLocalHttps() } })
-        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })\n        layout.addView(Button(this).apply { text="选择 G3 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })\n        layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
+        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
+        layout.addView(Button(this).apply { text="选择 G3 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })
+        layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写手机 Wi-Fi IPv4；STA MAC 从路由器 DHCP 列表读取（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
+        setContentView(layout); note("配网写入 Wi-Fi 与虚拟服务 IP；STA MAC 从 DHCP 列表读取。手机承载 HTTPS 8443 和 MQTT TLS 8883；固件升级需先验证五项网关应答。")
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
