@@ -19,12 +19,32 @@ import java.util.Date
 import javax.net.ssl.*
 
 /** Android-hosted HTTPS compatibility server. OTA is deliberately disabled in this first milestone. */
-class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext):NanoHTTPD("0.0.0.0",port) {
+data class G3FirmwareImage(val bytes:ByteArray,val version:String,val md5:String)
+
+object G3FirmwareValidator {
+    fun load(file:File, version:String):G3FirmwareImage {
+        require(version.matches(Regex("[A-Za-z0-9_.-]{1,31}"))) { "固件版本号格式无效" }
+        val raw=file.readBytes()
+        require(raw.size in 32..0x1E0000) { "固件大小不在 32..1966080 字节范围内" }
+        require((raw[0].toInt() and 255)==0xE9 && (raw[1].toInt() and 255) in 1..16) { "不是 ESP32 应用镜像（magic/segment count 错误）" }
+        require(raw[12]==0.toByte() && raw[13]==0.toByte()) { "固件芯片 ID 不是 ESP32" }
+        require(raw.size>=352 && raw.copyOfRange(32,36).contentEquals(byteArrayOf(0x32,0x54,0xcd.toByte(),0xab.toByte()))) { "固件缺少 G3 应用标识" }
+        val model="BRY88BBA15G".toByteArray(Charsets.US_ASCII).copyOf(32)
+        val product="PHICOMM-DAIKIN-1:full".toByteArray(Charsets.US_ASCII).copyOf(32)
+        require(raw.copyOfRange(288,320).contentEquals(model)) { "固件型号不匹配：需要 BRY88BBA15G" }
+        require(raw.copyOfRange(320,352).contentEquals(product)) { "固件不是 G3 full application" }
+        val md5=MessageDigest.getInstance("MD5").digest(raw).joinToString("") { "%02x".format(it.toInt() and 255) }
+        return G3FirmwareImage(raw,version,md5)
+    }
+}
+
+class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext, private val firmware:G3FirmwareImage?=null):NanoHTTPD("0.0.0.0",port) {
     private val token=java.util.UUID.randomUUID().toString().replace("-","")+java.util.UUID.randomUUID().toString().take(16)
     init { makeSecure(ssl.serverSocketFactory,null) }
     override fun serve(s:IHTTPSession):Response = try {
         when {
             s.method==Method.GET && s.uri=="/mqtt/root-ca.pem" -> binary(ca)
+            s.method==Method.GET && s.uri=="/firmware/bry88-esp32-app.bin" && firmware!=null -> binary(firmware.bytes)
             s.method==Method.GET && s.uri=="/ota/tenant/VRV/device/deviceLogin" -> {
                 val p=s.parameters
                 if(p["deviceId"]?.firstOrNull()!=mac || p["pwd"]?.firstOrNull()!=stockPassword(mac)) denied()
@@ -47,7 +67,13 @@ class G3HttpsServer(port:Int, private val mac:String, private val origin:String,
             s.method==Method.POST && s.uri=="/ota/tenant/VRV/device/checkUpgrade-json" -> {
                 val b=body(s)
                 if(s.headers["token"]!=token || b.optString("deviceId")!=mac) denied()
-                else reply(JSONObject().put("errcode",0).put("data",JSONObject().put("haveNewVersion",0)))
+                else {
+                    val offer=firmware!=null && b.optString("deviceType")=="SENSOR3_ESP32" && b.optString("firmwareVersion")!=firmware.version
+                    val data=JSONObject().put("haveNewVersion",if(offer) 1 else 0)
+                    if(offer) data.put("firmware",JSONObject().put("version",firmware!!.version)
+                        .put("s3Url",origin+"/firmware/bry88-esp32-app.bin").put("md5",firmware.md5))
+                    reply(JSONObject().put("errcode",0).put("data",data))
+                }
             }
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND,"application/json","{\"errcode\":1,\"data\":{}}")
         }
