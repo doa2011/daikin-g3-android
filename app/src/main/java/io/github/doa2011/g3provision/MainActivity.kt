@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var mac: EditText
     private lateinit var firmwareVersion: EditText
     private var firmwareFile: java.io.File? = null
+    private var firmwareSha256: String? = null
     private lateinit var output: TextView
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,17 +52,27 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("目标 ESP32 固件版本（如 1.2.3）"); firmwareFile = java.io.File(filesDir, "selected-g3-esp32.bin").takeIf { it.exists() }
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="启动手机 HTTPS/MQTT 服务"; setOnClickListener { startLocalHttps() } })
         layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
-        layout.addView(Button(this).apply { text="选择 G3 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })
+        layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
         layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网写入 Wi-Fi 与虚拟服务 IP；STA MAC 从 DHCP 列表读取。手机承载 HTTPS 8443 和 MQTT TLS 8883；固件升级需先验证五项网关应答。")
+        setContentView(layout)
+        note("配网写入 Wi-Fi 与虚拟服务 IP；STA MAC 从 DHCP 列表读取。手机承载 HTTPS 8443 和 MQTT TLS 8883。")
+        try {
+            val bundled=G3FirmwareValidator.loadBundled(this)
+            firmwareFile=bundled.first
+            firmwareSha256=bundled.second.sha256
+            firmwareVersion.setText(bundled.second.version)
+            note("内置 G3 固件已自动加载：RC7，1,288,544 字节；SHA256 校验通过。OTA 标签 V99.00.00。")
+        } catch(e:Exception) {
+            note("内置 G3 固件不可用：" + (e.message ?: e.javaClass.simpleName) + "。请重新安装完整 APK。")
+        }
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
@@ -218,12 +229,22 @@ class MainActivity : Activity() {
             require(Regex("[0-9A-F]{12}").matches(sta)) { "请填写 G3 的 Wi-Fi STA MAC，不是 BLE MAC" }
             val gateway = mac.text.toString().trim().replace(":", "").replace("-", "").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)) { "虚拟网关 MAC 无效" }
+            if(firmwareFile==null) {
+                val bundled=G3FirmwareValidator.loadBundled(this)
+                firmwareFile=bundled.first
+                firmwareSha256=bundled.second.sha256
+                firmwareVersion.setText(bundled.second.version)
+            }
+            val selected=firmwareFile ?: error("没有可用的 G3 ESP32 固件")
+            val version=firmwareVersion.text.toString().trim()
+            val image=G3FirmwareValidator.load(selected,version,firmwareSha256)
             val intent = android.content.Intent(this, G3MigrationService::class.java)
                 .putExtra(G3MigrationService.EXTRA_MAC, sta)
                 .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + virtualIp)
                 .putExtra(G3MigrationService.EXTRA_GATEWAY, gateway)
-                .putExtra(G3MigrationService.EXTRA_FIRMWARE_PATH, firmwareFile?.absolutePath ?: "")
-                .putExtra(G3MigrationService.EXTRA_VERSION, firmwareVersion.text.toString().trim())
+                .putExtra(G3MigrationService.EXTRA_FIRMWARE_PATH, selected.absolutePath)
+                .putExtra(G3MigrationService.EXTRA_FIRMWARE_SHA256, image.sha256)
+                .putExtra(G3MigrationService.EXTRA_VERSION, image.version)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
             note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883。只有五项网关应答完成后才能手动触发 OTA。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
@@ -253,8 +274,18 @@ class MainActivity : Activity() {
 
     private fun triggerOta() {
         val version = firmwareVersion.text.toString().trim()
-        if (firmwareFile == null || !firmwareFile!!.exists()) {
-            note("尚未选择并验证 G3 ESP32 raw 固件。")
+        try {
+            if (firmwareFile == null || !firmwareFile!!.exists()) {
+                val bundled=G3FirmwareValidator.loadBundled(this)
+                firmwareFile=bundled.first
+                firmwareSha256=bundled.second.sha256
+                firmwareVersion.setText(bundled.second.version)
+            }
+            val selected=firmwareFile ?: error("没有可用固件")
+            val image=G3FirmwareValidator.load(selected,version,firmwareSha256)
+            firmwareSha256=image.sha256
+        } catch(e:Exception) {
+            note("OTA 已阻止，固件校验失败：" + (e.message ?: e.javaClass.simpleName))
             return
         }
         val intent = android.content.Intent(this, G3MigrationService::class.java)
@@ -276,9 +307,11 @@ class MainActivity : Activity() {
             }
             val image = G3FirmwareValidator.load(dst, firmwareVersion.text.toString().trim())
             firmwareFile = dst
-            note("G3 ESP32 固件验证通过：大小=" + image.bytes.size + "，版本=" + image.version + "，MD5=" + image.md5)
+            firmwareSha256 = image.sha256
+            note("手动固件验证通过：大小=" + image.bytes.size + "，版本=" + image.version + "，SHA256=" + image.sha256 + "，MD5=" + image.md5)
         } catch (e: Exception) {
             firmwareFile = null
+            firmwareSha256 = null
             note("固件拒绝：" + (e.message ?: e.javaClass.simpleName))
         }
     }
