@@ -59,7 +59,7 @@ class G3HttpsServer(port:Int, private val mac:String, private val origin:String,
     companion object {
         fun stockPassword(mac:String):String {
             var crc=0
-            mac.chunked(2).forEachIndexed { i,h -> crc=crc xor ((h.toInt(16)+10*(i+1)) and 255);repeat(8){if((crc and 1)!=0)crc=crc xor 0x10811;crc=crc ushr 1;crc=crc and 0xffff} }
+            mac.chunked(2).forEachIndexed { i,h -> crc=crc xor ((h.toInt(16)+10*(i+1)) and 255);repeat(8){if((crc and 1)!=0)crc=crc xor 0x10811;crc=crc ushr 1};crc=crc and 0xffff }
             return "%04X".format(crc)
         }
     }
@@ -70,22 +70,22 @@ class G3TlsIdentity(private val service:Service) {
     private val pem=File(dir,"ca.pem");private val p12=File(dir,"identity.p12")
     private val pass=("g3-"+service.packageName+"-private").toCharArray()
     data class Result(val ca:ByteArray,val ssl:SSLContext)
-    fun load():Result {
+    fun load(host:String):Result {
         if(Security.getProvider("BC")==null)Security.addProvider(BouncyCastleProvider())
-        if(!pem.exists()||!p12.exists())create()
+        if(!pem.exists()||!p12.exists())create(host)
         val ks=KeyStore.getInstance("PKCS12");p12.inputStream().use{ks.load(it,pass)}
         val km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());km.init(ks,pass)
         val ssl=SSLContext.getInstance("TLS");ssl.init(km.keyManagers,null,null)
         return Result(pem.readBytes(),ssl)
     }
-    private fun create() {
+    private fun create(host:String) {
         val kg=KeyPairGenerator.getInstance("RSA");kg.initialize(2048);val kp=kg.generateKeyPair()
         val name=X500Name("CN=newlifemulti.daikin-china.com.cn");val now=System.currentTimeMillis()
         val b=JcaX509v3CertificateBuilder(name,BigInteger(160,SecureRandom()),Date(now-300000),Date(now+30L*86400000),name,kp.public)
         b.addExtension(Extension.subjectAlternativeName,false,GeneralNames(arrayOf(
             GeneralName(GeneralName.dNSName,"newlifemulti.daikin-china.com.cn"),
             GeneralName(GeneralName.dNSName,"newlifemulti-cdh.daikin-china.com.cn"),
-            GeneralName(GeneralName.dNSName,"newlifemulti-cdh-core.daikin-china.com.cn"))))
+            GeneralName(GeneralName.dNSName,"newlifemulti-cdh-core.daikin-china.com.cn"), GeneralName(GeneralName.iPAddress,java.net.InetAddress.getByName(host).hostAddress))))
         b.addExtension(Extension.basicConstraints,true,BasicConstraints(true))
         b.addExtension(Extension.keyUsage,true,KeyUsage(KeyUsage.keyCertSign or KeyUsage.digitalSignature or KeyUsage.keyEncipherment))
         val cert:JcaX509CertificateConverter=JcaX509CertificateConverter().setProvider("BC")
@@ -109,7 +109,8 @@ class G3MigrationService:Service() {
             require(Regex("[0-9A-F]{12}").matches(mac)){"请输入 G3 Wi-Fi STA MAC"}
             val origin=i?.getStringExtra(EXTRA_ORIGIN)?: ""
             require(origin.startsWith("https://")){"origin 必须为 https:// 开头"}
-            val id=G3TlsIdentity(this).load()
+            val host=java.net.URI(origin).host ?: throw IllegalArgumentException("origin host invalid")
+            val id=G3TlsIdentity(this).load(host)
             server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl);server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 running; MQTT pending").apply()
         } catch(e:Exception) {
