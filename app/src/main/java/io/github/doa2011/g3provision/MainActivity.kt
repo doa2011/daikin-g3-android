@@ -234,7 +234,8 @@ class MainActivity : Activity() {
         val acks = getSharedPreferences("g3", 0).getStringSet("gateway_acks", emptySet()) ?: emptySet()
         val expected = listOf("snapshot_upload", "get_weather", "login_ipbox", "get_filter_sensor3", "get_error_sensor3")
         val lines = expected.map { name -> (if (acks.any { it.endsWith(name) }) "✓ " else "○ ") + name }
-        note("网关应答进度 " + acks.size + "/5\n" + lines.joinToString("\n"))
+        val ota = getSharedPreferences("g3", 0).getString("ota_state", "尚未触发") ?: "尚未触发"
+        note("网关应答进度 " + acks.size + "/5\n" + lines.joinToString("\n") + "\nOTA 状态：" + ota)
     }
 
 
