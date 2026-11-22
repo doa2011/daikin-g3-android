@@ -53,7 +53,8 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
-        layout.addView(Button(this).apply { text="启动手机 HTTPS 迁移服务（测试阶段）"; setOnClickListener { startLocalHttps() } })
+        layout.addView(Button(this).apply { text="启动手机 HTTPS/MQTT 服务"; setOnClickListener { startLocalHttps() } })
+        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写手机 Wi-Fi IPv4；STA MAC 从路由器 DHCP 列表读取（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
     }
@@ -219,6 +220,14 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
             note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883；OTA 尚未启用。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
+    }
+
+
+    private fun showGatewayAcks() {
+        val acks = getSharedPreferences("g3", 0).getStringSet("gateway_acks", emptySet()) ?: emptySet()
+        val expected = listOf("snapshot_upload", "get_weather", "login_ipbox", "get_filter_sensor3", "get_error_sensor3")
+        val lines = expected.map { name -> (if (acks.any { it.endsWith(name) }) "✓ " else "○ ") + name }
+        note("网关应答进度 " + acks.size + "/5\n" + lines.joinToString("\n"))
     }
 
     private fun provision() {
