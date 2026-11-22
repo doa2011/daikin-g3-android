@@ -23,7 +23,8 @@ class G3MqttBroker(
     private val gatewayMac: String,
     private val sslContext: SSLContext,
     private val port: Int = 8883,
-    private val weatherCode: Int = 1,\n    private val onAckState: (Set<String>) -> Unit = {}
+    private val weatherCode: Int = 1,
+    private val onAckState: (Set<String>) -> Unit = {}
 ) {
     @Volatile private var running = false
     private var listener: SSLServerSocket? = null
@@ -60,7 +61,9 @@ class G3MqttBroker(
         delayed.shutdownNow()
     }
 
-    fun isRunning() = running\n    fun acknowledgedTopics(): Set<String> = acknowledged.toSet()\n    fun allGatewayRepliesObserved(): Boolean = acknowledged.size == 5
+    fun isRunning() = running
+    fun acknowledgedTopics(): Set<String> = acknowledged.toSet()
+    fun allGatewayRepliesObserved(): Boolean = acknowledged.size == 5
 
     private inner class Client(private val socket: Socket) {
         private val input = DataInputStream(socket.getInputStream())
@@ -200,7 +203,12 @@ class G3MqttBroker(
             }
             val response = JSONObject().put("code", 0).put("data", responseData)
                 .put("client_token", token).put("timestamp", System.currentTimeMillis()).toString()
-            val recipients = clients.filter { it.accepts(responseTopic) }\n            if (recipients.isNotEmpty()) {\n                recipients.forEach { it.sendPublish(responseTopic, response) }\n                acknowledged.add(responseTopic)\n                onAckState(acknowledgedTopics())\n            }
+            val recipients = clients.filter { it.accepts(responseTopic) }
+            if (recipients.isNotEmpty()) {
+                recipients.forEach { it.sendPublish(responseTopic, response) }
+                acknowledged.add(responseTopic)
+                onAckState(acknowledgedTopics())
+            }
         } catch (_: Exception) {
             // Ignore malformed or unrelated factory messages.
         }
