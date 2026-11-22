@@ -94,6 +94,7 @@ class G3TlsIdentity(private val service:Service) {
         val x:X509Certificate=cert.getCertificate(b.build(JcaContentSignerBuilder("SHA256withRSA").build(kp.private)));x.verify(kp.public)
         val ks=KeyStore.getInstance("PKCS12");ks.load(null,pass);ks.setKeyEntry("g3",kp.private,pass,arrayOf(x));p12.outputStream().use{ks.store(it,pass)}
         pem.writeText("-----BEGIN CERTIFICATE-----\n"+Base64.getMimeEncoder(64,byteArrayOf(10)).encodeToString(x.encoded)+"\n-----END CERTIFICATE-----\n")
+        hostFile.writeText(host)
     }
 }
 
