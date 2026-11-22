@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var ssid: EditText
     private lateinit var password: EditText
     private lateinit var host: EditText
+    private lateinit var deviceStaMac: EditText
     private lateinit var mac: EditText
     private lateinit var output: TextView
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
@@ -47,11 +48,12 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("Linux 服务端 IPv4（HTTPS 443 + 临时 MQTT TLS 8883）"); mac = field("虚拟网关 MAC", "020000000001")
+        host = field("手机 Wi-Fi IPv4（迁移服务地址）"); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 列表读取）"); mac = field("虚拟网关 MAC", "020000000001")
         layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
+        layout.addView(Button(this).apply { text="启动手机 HTTPS 迁移服务（测试阶段）"; setOnClickListener { startLocalHttps() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写运行 G3 迁移服务的 Linux 主机 IPv4（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
     }
@@ -177,6 +179,22 @@ class MainActivity : Activity() {
         else { @Suppress("DEPRECATION") c.value=frame
             @Suppress("DEPRECATION") g.writeCharacteristic(c) }
     }
+
+    private fun startLocalHttps() {
+        try {
+            val ip = host.text.toString().trim()
+            val parts = ip.split(".")
+            require(parts.size == 4 && parts.all { it.toIntOrNull() in 0..255 }) { "手机 Wi-Fi IPv4 无效" }
+            val sta = deviceStaMac.text.toString().trim().replace(":", "").replace("-", "").uppercase()
+            require(Regex("[0-9A-F]{12}").matches(sta)) { "请填写 G3 的 Wi-Fi STA MAC，不是 BLE MAC" }
+            val intent = android.content.Intent(this, G3MigrationService::class.java)
+                .putExtra(G3MigrationService.EXTRA_MAC, sta)
+                .putExtra(G3MigrationService.EXTRA_ORIGIN, "https://" + ip)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+            note("已请求启动手机 HTTPS 服务；当前仅完成 HTTPS 阶段，MQTT Broker 和 OTA 尚未集成。")
+        } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
+    }
+
     private fun provision() {
         try {
             require(tx!=null) {"未连接"}
@@ -199,7 +217,7 @@ class MainActivity : Activity() {
         } catch(e:Exception) {note("错误 "+e.message)}
     }
     private fun sendChunks() {
-        if(chunkIndex>=chunks.size) {chunks=emptyList();note("BLE 配网数据已发送；尚不代表设备已入网。请在路由器 DHCP 列表核对 Wi-Fi STA MAC，再检查 NAS HTTPS/MQTT 日志。");return}
+        if(chunkIndex>=chunks.size) {chunks=emptyList();note("BLE 配网数据已发送；尚不代表设备已入网。请在路由器 DHCP 列表核对 Wi-Fi STA MAC，再检查手机迁移服务日志。");return}
         val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
         handler.postDelayed({sendChunks()},600)
     }
