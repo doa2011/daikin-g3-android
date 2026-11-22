@@ -22,7 +22,7 @@ class G3MqttBroker(
     private val mac: String,
     private val gatewayMac: String,
     private val sslContext: SSLContext,
-    private val port: Int = 18883,
+    private val port: Int = 8883,
     private val weatherCode: Int = 1
 ) {
     @Volatile private var running = false
