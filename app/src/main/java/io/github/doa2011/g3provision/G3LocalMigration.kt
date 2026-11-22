@@ -133,16 +133,16 @@ class G3MigrationService:Service() {
     private var wifiLock:android.net.wifi.WifiManager.WifiLock?=null
     override fun onBind(i:Intent?):IBinder?=null
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
+        val channel="g3-local-migration"
+        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
+        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 8883 服务运行中").setOngoing(true).build()
+        startForeground(41,n)
         if (i?.getBooleanExtra(EXTRA_TRIGGER_OTA,false)==true) {
             val version=i.getStringExtra(EXTRA_VERSION).orEmpty()
             val ok=firmware!=null && firmware?.version==version && broker?.triggerEsp32Upgrade(version)==true
             getSharedPreferences("g3",0).edit().putString("ota_state",if(ok) "ESP32 OTA command sent once" else "OTA blocked: firmware missing, gateway replies incomplete, or device not subscribed").apply()
             return START_NOT_STICKY
         }
-        val channel="g3-local-migration"
-        getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
-        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 8883 服务运行中").setOngoing(true).build()
-        startForeground(41,n)
         try {
             val pm=getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
             cpuLock=pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"G3Migration:CPU").apply{setReferenceCounted(false);acquire()}
