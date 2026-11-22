@@ -55,7 +55,7 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="启动手机 HTTPS 迁移服务（测试阶段）"; setOnClickListener { startLocalHttps() } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写运行 G3 迁移服务的 Linux 主机 IPv4（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
+        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写手机 Wi-Fi IPv4；STA MAC 从路由器 DHCP 列表读取（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
