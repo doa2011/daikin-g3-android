@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
 
@@ -31,6 +32,7 @@ class G3MqttBroker(
     private val workers = Executors.newCachedThreadPool()
     private val delayed = Executors.newSingleThreadScheduledExecutor()
     private val clients = ConcurrentHashMap.newKeySet<Client>()
+    private val packetIds = AtomicInteger(1)
     private val acknowledged = ConcurrentHashMap.newKeySet<String>()
 
     fun start() {
@@ -73,7 +75,7 @@ class G3MqttBroker(
             .toString()
         val recipients = clients.filter { it.accepts(topic) }
         if (recipients.isEmpty()) return false
-        recipients.forEach { it.sendPublish(topic, payload) }
+        recipients.forEach { it.sendPublish(topic, payload, 1) }
         return true
     }
 
@@ -167,12 +169,14 @@ class G3MqttBroker(
             delayed.schedule({ acknowledge(topic, responseTopic, raw) }, 1500, TimeUnit.MILLISECONDS)
         }
 
-        fun sendPublish(topic: String, payload: String) {
+        fun sendPublish(topic: String, payload: String, qos: Int = 0) {
             val topicBytes = topic.toByteArray(StandardCharsets.UTF_8)
             val data = payload.toByteArray(StandardCharsets.UTF_8)
-            val body = byteArrayOf((topicBytes.size ushr 8).toByte(), topicBytes.size.toByte()) + topicBytes + data
+            val packetId = if (qos == 1) packetIds.getAndUpdate { if (it >= 65535) 1 else it + 1 } else 0
+            val packet = if (qos == 1) byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()) else byteArrayOf()
+            val body = byteArrayOf((topicBytes.size ushr 8).toByte(), topicBytes.size.toByte()) + topicBytes + packet + data
             synchronized(output) {
-                writePacketLocked(0x30, body)
+                writePacketLocked(0x30 or (qos shl 1), body)
             }
         }
 
