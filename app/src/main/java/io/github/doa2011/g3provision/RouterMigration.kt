@@ -118,7 +118,7 @@ uci set firewall.g3mig_mqtt.target=DNAT
 uci commit firewall
 /etc/init.d/firewall reload
 echo "G3-only migration redirects installed."
-""".trimIndent() + "\\n"
+""".trimIndent() + "\n"
     }
 
     private fun removeScript(): String = """
