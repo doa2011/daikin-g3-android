@@ -6,9 +6,9 @@ android {
     namespace = "io.github.doa2011.g3provision"
     compileSdk = 35
     defaultConfig {
-        applicationId = "io.github.doa2011.g3provision"
+        applicationId = "io.github.doa2011.g3debug"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
     }
@@ -20,3 +20,5 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies { implementation("org.msgpack:msgpack-core:0.9.9") }
