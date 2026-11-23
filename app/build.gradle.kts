@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+dependencies { implementation("com.github.mwiede:jsch:0.2.21") }
+
 android {
     namespace = "io.github.doa2011.g3provision"
     compileSdk = 35
