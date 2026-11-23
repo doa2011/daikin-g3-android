@@ -72,7 +72,7 @@ class MainActivity : Activity() {
         routerFingerprint = field("SSH 主机指纹 SHA256（首次连接留空，核对后填入）")
         phoneIp = field("S24 当前 Wi-Fi IPv4", detectPhoneIpv4())
         g3Ip = field("G3 当前 Wi-Fi STA IPv4（从 DHCP 租约读取）")
-        layout.addView(Button(this).apply { text="启动本机 DNS 服务（UDP/TCP 5353）"; setOnClickListener { startMigrationDns() } })
+        layout.addView(Button(this).apply { text="启动本机 DNS 服务（UDP/TCP 1053）"; setOnClickListener { startMigrationDns() } })
         layout.addView(Button(this).apply { text="通过 SSH 配置 G3 专用 DNS / HTTPS / MQTT 转发"; setOnClickListener { routerAction(true) } })
         layout.addView(Button(this).apply { text="撤销 G3 专用转发并停止 DNS"; setOnClickListener { routerAction(false) } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
@@ -98,7 +98,7 @@ class MainActivity : Activity() {
             require(router.isNotBlank()) { "请填写 OpenWrt LAN 地址" }
             dnsServer?.stop()
             dnsServer = DnsRedirectServer(router, router).also { it.start() }
-            note("本机 DNS UDP/TCP 5353 已启动；三个原厂域名将解析到 " + router)
+            note("本机 DNS UDP/TCP 1053 已启动；三个原厂域名将解析到 " + router)
         } catch (e: Exception) { dnsServer = null; note("DNS 启动失败：" + e.message) }
     }
 
