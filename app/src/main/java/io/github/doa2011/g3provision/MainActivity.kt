@@ -78,6 +78,50 @@ class MainActivity : Activity() {
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
         setContentView(ScrollView(this).apply { addView(layout) }); note("已加入 OpenWrt 定向规则基础模块。HTTPS/MQTT 服务仍在开发，暂不要开始真实设备升级。")
     }
+    private fun detectPhoneIpv4(): String {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val addresses = interfaces.nextElement().inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (address is Inet4Address && !address.isLoopbackAddress && address.isSiteLocalAddress) return address.hostAddress ?: ""
+                }
+            }
+            ""
+        } catch (_: Exception) { "" }
+    }
+
+    private fun startMigrationDns() {
+        try {
+            val router = routerLanIp.text.toString().trim()
+            require(router.isNotBlank()) { "请填写 OpenWrt LAN 地址" }
+            dnsServer?.stop()
+            dnsServer = DnsRedirectServer(router, router).also { it.start() }
+            note("本机 DNS UDP/TCP 5353 已启动；三个原厂域名将解析到 " + router)
+        } catch (e: Exception) { dnsServer = null; note("DNS 启动失败：" + e.message) }
+    }
+
+    private fun routerAction(enable: Boolean) {
+        val h=routerHost.text.toString().trim(); val u=routerUser.text.toString().trim()
+        val pw=routerPassword.text.toString(); val fp=routerFingerprint.text.toString().trim()
+        val r=routerLanIp.text.toString().trim(); val p=phoneIp.text.toString().trim(); val g=g3Ip.text.toString().trim()
+        if (enable && dnsServer == null) return note("请先启动本机 DNS 服务，避免 G3 DNS 被转发到未监听端口")
+        if (pw.isEmpty()) return note("请输入 OpenWrt SSH 密码")
+        note(if (enable) "正在通过 SSH 安装 G3 专用规则……" else "正在通过 SSH 撤销 G3 专用规则……")
+        Thread {
+            try {
+                val result=if(enable) RouterMigration.apply(h,u,pw,fp,r,p,g) else RouterMigration.remove(h,u,pw,fp,r,p,g)
+                runOnUiThread {
+                    note(result.output)
+                    if(result.fingerprint.isNotBlank()) note("OpenWrt SSH 主机指纹："+result.fingerprint)
+                    if(enable) note("路由器规则已配置。HTTPS 8443 / MQTT TLS 18883 服务尚未就绪，暂不可升级。")
+                    else { dnsServer?.stop(); dnsServer=null; note("DNS 服务已停止") }
+                    routerPassword.setText("")
+                }
+            } catch(e:Exception) { runOnUiThread { note("OpenWrt 操作失败："+(e.message ?: e.javaClass.simpleName)); routerPassword.setText("") } }
+        }.start()
+    }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
             else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -226,5 +270,5 @@ class MainActivity : Activity() {
         val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
         handler.postDelayed({sendChunks()},600)
     }
-    override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
+    override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); dnsServer?.stop(); dnsServer=null; super.onDestroy();gatt?.close()}
 }
