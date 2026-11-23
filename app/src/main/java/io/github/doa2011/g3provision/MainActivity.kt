@@ -12,6 +12,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.*
+import android.text.InputType
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.util.UUID
 
 class MainActivity : Activity() {
@@ -39,6 +42,14 @@ class MainActivity : Activity() {
     private lateinit var host: EditText
     private lateinit var mac: EditText
     private lateinit var output: TextView
+    private lateinit var routerHost: EditText
+    private lateinit var routerUser: EditText
+    private lateinit var routerPassword: EditText
+    private lateinit var routerFingerprint: EditText
+    private lateinit var routerLanIp: EditText
+    private lateinit var phoneIp: EditText
+    private lateinit var g3Ip: EditText
+    private var dnsServer: DnsRedirectServer? = null
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,8 +63,20 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
+
+        layout.addView(TextView(this).apply { text="OpenWrt 自动配置（仅匹配指定 G3）"; textSize=16f })
+        routerHost = field("OpenWrt SSH 地址", "192.168.99.1")
+        routerLanIp = field("OpenWrt LAN 地址", "192.168.99.1")
+        routerUser = field("SSH 用户名", "root")
+        routerPassword = field("SSH 密码（仅本次内存使用）").apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        routerFingerprint = field("SSH 主机指纹 SHA256（首次连接留空，核对后填入）")
+        phoneIp = field("S24 当前 Wi-Fi IPv4", detectPhoneIpv4())
+        g3Ip = field("G3 当前 Wi-Fi STA IPv4（从 DHCP 租约读取）")
+        layout.addView(Button(this).apply { text="启动本机 DNS 服务（UDP/TCP 5353）"; setOnClickListener { startMigrationDns() } })
+        layout.addView(Button(this).apply { text="通过 SSH 配置 G3 专用 DNS / HTTPS / MQTT 转发"; setOnClickListener { routerAction(true) } })
+        layout.addView(Button(this).apply { text="撤销 G3 专用转发并停止 DNS"; setOnClickListener { routerAction(false) } })
         output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写运行 G3 迁移服务的 Linux 主机 IPv4（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
+        setContentView(ScrollView(this).apply { addView(layout) }); note("已加入 OpenWrt 定向规则基础模块。HTTPS/MQTT 服务仍在开发，暂不要开始真实设备升级。")
     }
     private fun permitted(): Boolean {
         val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
