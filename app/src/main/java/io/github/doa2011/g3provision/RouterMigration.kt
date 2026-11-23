@@ -78,7 +78,7 @@ object RouterMigration {
 set -eu
 mkdir -p /root/g3-migration-backup
 [ -f /root/g3-migration-backup/firewall.first ] || cp /etc/config/firewall /root/g3-migration-backup/firewall.first
-for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.${'
+for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.${'$'}s || true; done
 uci set firewall.g3mig_dns_udp=redirect
 uci set firewall.g3mig_dns_udp.name='G3 migration DNS UDP'
 uci set firewall.g3mig_dns_udp.src=lan
@@ -129,7 +129,7 @@ echo 'G3-only migration redirects installed.'
 
     private fun removeScript()="""
 set -eu
-for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.$s || true; done
+for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.${'$'}s || true; done
 uci commit firewall
 /etc/init.d/firewall reload
 echo 'Only G3 migration redirects removed; unrelated firewall settings preserved.'
@@ -186,7 +186,7 @@ echo 'G3-only migration redirects installed.'
 
     private fun removeScript()="""
 set -eu
-for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.$s || true; done
+for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.${'$'}s || true; done
 uci commit firewall
 /etc/init.d/firewall reload
 echo 'Only G3 migration redirects removed; unrelated firewall settings preserved.'
