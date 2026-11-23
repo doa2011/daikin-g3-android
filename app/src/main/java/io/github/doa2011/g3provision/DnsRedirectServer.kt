@@ -100,7 +100,8 @@ class DnsRedirectServer(
                 byteArrayOf(0xC0.toByte(), 0x0C, 0, 1, 0, 1, 0, 0, 0, 20, 0, 4) + ip
             } else byteArrayOf() // Suppress AAAA so the stock client cannot bypass the IPv4 migration endpoint.
             return header + query.copyOfRange(12, q.end) + answer
-        }        return forward(query, tcpMode)
+        }
+        return forward(query, tcpMode)
     }
 
     private data class Question(val name: String, val type: Int, val end: Int)
