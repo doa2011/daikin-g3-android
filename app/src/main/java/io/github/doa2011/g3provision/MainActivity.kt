@@ -1,207 +1,126 @@
 package io.github.doa2011.g3provision
 
-import android.Manifest
 import android.app.Activity
-import android.bluetooth.*
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
-import android.content.pm.PackageManager
-import android.os.Build
+import android.app.AlertDialog
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
+import android.graphics.Typeface
 import android.widget.*
+import android.text.InputType
+import org.json.*
+import org.msgpack.core.MessagePack
+import org.msgpack.core.MessagePacker
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.UUID
+import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    private val handler = Handler(Looper.getMainLooper())
-    private val manager by lazy { getSystemService(BLUETOOTH_SERVICE) as BluetoothManager }
-    private val devices = linkedMapOf<String, BluetoothDevice>()
-    private val deviceLabels = linkedMapOf<String, String>()
-    private var scanning = false
-    private var scanCount = 0
-    private var lastTargetRssiLog = 0L
-    private val stopScanRunnable = Runnable { stopScanning() }
-    private val service = UUID.fromString("0000ffff-0000-1000-8000-00805f9b34fb")
-    private val txUuid = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
-    private val rxUuid = UUID.fromString("0000ff02-0000-1000-8000-00805f9b34fb")
-    private val cccd = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-    private var gatt: BluetoothGatt? = null
-    private var tx: BluetoothGattCharacteristic? = null
-    private var seq = 0
-    private var chunks = listOf<ByteArray>()
-    private var chunkIndex = 0
-    private lateinit var selector: Spinner
-    private lateinit var bleAddress: EditText
-    private lateinit var ssid: EditText
+    private val reads = listOf("status.get","diagnostics.get","screen.log.get","screen.recovery.get","config.get","screen.boot.result.get")
+    private lateinit var target: EditText
+    private lateinit var action: AutoCompleteTextView
+    private lateinit var params: EditText
+    private lateinit var user: EditText
     private lateinit var password: EditText
-    private lateinit var host: EditText
-    private lateinit var mac: EditText
     private lateinit var output: TextView
-    private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
+    private lateinit var interval: Spinner
+    private lateinit var poll: Button
+    private val handler = Handler(Looper.getMainLooper())
+    private val worker = Executors.newSingleThreadExecutor()
+    private var busy = false
+    private var polling = false
+    private var closed = false
+    private val log = StringBuilder()
+    private data class Request(val url: String,val action: String,val params: JSONObject,val auth: String)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20,20,20,20) }
-        fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
-        selector = Spinner(this); layout.addView(selector)
-        bleAddress = field("BLE MAC（可选；留空时从扫描列表选择）", "")
-        ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("Linux 服务端 IPv4（HTTPS 443 + 临时 MQTT TLS 8883）"); mac = field("虚拟网关 MAC", "020000000001")
-        layout.addView(Button(this).apply { text="扫描全部 BLE 设备"; setOnClickListener { scan() } })
-        layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
-        layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
-        layout.addView(Button(this).apply { text="发送配网（不刷机）"; setOnClickListener { provision() } })
-        output=TextView(this); layout.addView(ScrollView(this).apply { addView(output) },LinearLayout.LayoutParams(-1,0,1f))
-        setContentView(layout); note("配网仅写入 Wi-Fi 与虚拟网关地址；填写运行 G3 迁移服务的 Linux 主机 IPv4（HTTPS 443 + 临时 Mosquitto TLS 8883）。此 App 不执行 OTA。")
+        val root = LinearLayout(this).apply { orientation=1; setPadding(24,24,24,24) }
+        val scroll=ScrollView(this).apply { addView(root) }
+        setContentView(scroll)
+        fun label(s:String) { root.addView(TextView(this).apply { text=s; textSize=14f }) }
+        fun field(s:String,v:String=""):EditText { label(s); return EditText(this).apply { setText(v); setSingleLine(true); root.addView(this) } }
+        fun button(s:String,fn:()->Unit):Button = Button(this).apply { text=s; setOnClickListener { fn() }; root.addView(this) }
+        root.addView(TextView(this).apply { text="G3 Debug"; textSize=26f; setTypeface(null,Typeface.BOLD) })
+        target=field("调试目标",getPreferences(0).getString("target","http://192.168.99.155") ?: "")
+        label("命令（可手动输入）")
+        action=AutoCompleteTextView(this).apply { setAdapter(ArrayAdapter(this@MainActivity,android.R.layout.simple_dropdown_item_1line,reads)); threshold=0; setText("status.get"); setOnClickListener { showDropDown() }; root.addView(this) }
+        params=field("JSON 参数","{}").apply { setSingleLine(false); minLines=2 }
+        user=field("用户名（可选）")
+        password=field("密码（不保存）").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        button("发送命令") { submit(false) }
+        button("全部诊断") { submit(true) }
+        interval=Spinner(this).apply { adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("1 秒","2 秒","5 秒","10 秒","30 秒")); setSelection(1); root.addView(this) }
+        poll=button("开始只读轮询") { if(polling) stopPoll() else if(action.text.toString() in reads) { polling=true; poll.text="停止轮询"; submit(false) } else toast("仅允许只读命令轮询") }
+        button("复制结果") { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("G3 Debug",log.toString())); toast("已复制") }
+        button("分享结果") { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type="text/plain"; putExtra(Intent.EXTRA_TEXT,log.toString()) },"分享诊断")) }
+        button("清空结果") { log.clear(); output.text="" }
+        label("返回结果")
+        output=TextView(this).apply { typeface=Typeface.MONOSPACE; textSize=13f; setTextIsSelectable(true); root.addView(this) }
     }
-    private fun permitted(): Boolean {
-        val p=if(Build.VERSION.SDK_INT>=31) arrayOf(Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT,Manifest.permission.ACCESS_FINE_LOCATION)
-            else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        val missing=p.filter { checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED }
-        if(missing.isNotEmpty()) { requestPermissions(missing.toTypedArray(),100); return false }
-        return true
+    private fun toast(s:String) { Toast.makeText(this,s,Toast.LENGTH_SHORT).show() }
+    private fun stopPoll() { polling=false; handler.removeCallbacksAndMessages(null); poll.text="开始只读轮询" }
+    override fun onStop() { stopPoll(); super.onStop() }
+    override fun onDestroy() { closed=true; worker.shutdownNow(); super.onDestroy() }
+    private fun append(s:String) { log.append(s).append("\n"); if(log.length>200000) log.delete(0,log.length-200000); output.text=log.toString() }
+    private fun submit(all:Boolean) {
+        if(busy) { if(polling) handler.postDelayed({submit(false)},500); return }
+        val reqs=try {
+            var base=target.text.toString().trim().trimEnd('/')
+            if(!base.contains("://")) base="http://"+base
+            val url=URL(base)
+            require(url.protocol in listOf("http","https") && url.host.isNotBlank() && url.userInfo==null && url.query==null && url.ref==null && url.path.isEmpty())
+            val cmd=action.text.toString().trim(); require(cmd.isNotEmpty())
+            val auth=if(user.text.isNotEmpty()) android.util.Base64.encodeToString((user.text.toString()+":"+password.text.toString()).toByteArray(),android.util.Base64.NO_WRAP) else ""
+            getPreferences(0).edit().putString("target",base).apply()
+            if(all) reads.take(4).map { Request(base,it,JSONObject(),auth) } else listOf(Request(base,cmd,JSONObject(params.text.toString().ifBlank{"{}"}),auth))
+        } catch(e:Exception) { stopPoll(); toast("地址或 JSON 参数无效"); return }
+        if(polling && reqs.any { it.action !in reads }) { stopPoll(); return }
+        if(reqs.any { it.action !in reads }) {
+            AlertDialog.Builder(this).setTitle("确认执行非只读命令").setMessage(reqs.first().action).setNegativeButton("取消",null).setPositiveButton("执行"){_,_-> execute(reqs)}.show()
+        } else execute(reqs)
     }
-    private fun refreshDevices() {
-        val selected = selector.selectedItemPosition
-        selector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, deviceLabels.values.toList())
-        if (selected >= 0 && selected < deviceLabels.size) selector.setSelection(selected)
-    }
-    private val scanner=object: ScanCallback() {
-        override fun onScanResult(callbackType:Int,result:ScanResult) {
-            val address = result.device.address
-            val name = result.scanRecord?.deviceName
-                ?: try { result.device.name } catch (_: SecurityException) { null }
-            val display = name?.takeIf { it.isNotBlank() } ?: "未命名设备"
-            scanCount++
-            if (address.equals("D0:EF:76:25:5D:CE", true) && android.os.SystemClock.elapsedRealtime() - lastTargetRssiLog > 3000) {
-                lastTargetRssiLog = android.os.SystemClock.elapsedRealtime()
-                note("已发现目标 G3：$display，RSSI=${result.rssi}")
+    private fun execute(reqs:List<Request>) {
+        if(busy || closed) return
+        busy=true
+        worker.execute {
+            for(r in reqs) {
+                val result=try { call(r) } catch(e:Exception) { "ERROR: "+e.toString() }
+                handler.post { if(!closed) append("========== "+r.action+" ==========\n"+result) }
             }
-            if (devices.put(address, result.device) == null) {
-                deviceLabels[address] = "$display ($address, RSSI ${result.rssi})"
-                runOnUiThread { refreshDevices() }
-            }
-        }
-        override fun onScanFailed(errorCode: Int) {
-            scanning = false
-            note("扫描失败，错误码=$errorCode")
+            handler.post { busy=false; if(!closed && polling) handler.postDelayed({submit(false)},listOf(1000L,2000L,5000L,10000L,30000L)[interval.selectedItemPosition]) }
         }
     }
-    private fun stopScanning() {
-        if (!scanning) return
-        scanning = false
-        try { manager.adapter.bluetoothLeScanner?.stopScan(scanner) }
-        catch (e: Exception) { note("停止扫描异常: " + e.message) }
-        note("扫描结束：收到 $scanCount 条广播，发现 ${devices.size} 台设备")
+    private fun pack(p:MessagePacker,v:Any?) {
+        when(v) {
+            null,JSONObject.NULL -> p.packNil()
+            is JSONObject -> { p.packMapHeader(v.length()); val keys=v.keys(); while(keys.hasNext()){val k=keys.next();p.packString(k);pack(p,v.get(k))} }
+            is JSONArray -> { p.packArrayHeader(v.length()); for(i in 0 until v.length()) pack(p,v.get(i)) }
+            is Boolean -> p.packBoolean(v)
+            is Int -> p.packInt(v)
+            is Long -> p.packLong(v)
+            is Number -> p.packDouble(v.toDouble())
+            else -> p.packString(v.toString())
+        }
     }
-    private fun scan() {
-        if (!permitted()) { note("请先授予附近设备权限，再点击扫描"); return }
-        if (!manager.adapter.isEnabled) { note("请先打开蓝牙"); return }
-        stopScanning()
-        devices.clear()
-        deviceLabels.clear()
-        refreshDevices()
-        scanCount = 0
-        val bleScanner = manager.adapter.bluetoothLeScanner ?: return note("BLE 扫描器不可用")
+    private fun call(r:Request):String {
+        val p=MessagePack.newDefaultBufferPacker()
+        val body=p.use { pack(it,JSONObject().put("request_id",UUID.randomUUID().toString().replace("-","")).put("action",r.action).put("params",r.params)); it.toByteArray() }
+        val c=URL(r.url+"/api/v1/command").openConnection() as HttpURLConnection
+        val start=System.currentTimeMillis()
         try {
-            scanning = true
-            val settings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .build()
-            bleScanner.startScan(null, settings, scanner)
-            note("扫描全部 BLE 设备 20 秒；不再按 SENSOR3_ 名称过滤")
-            handler.removeCallbacks(stopScanRunnable)
-            handler.postDelayed(stopScanRunnable, 20000)
-        } catch (e: Exception) {
-            scanning = false
-            note("启动扫描异常: " + e.message)
-        }
+            c.requestMethod="POST"; c.instanceFollowRedirects=false; c.connectTimeout=8000; c.readTimeout=8000; c.doOutput=true
+            c.setRequestProperty("Content-Type","application/msgpack")
+            if(r.auth.isNotEmpty()) c.setRequestProperty("Authorization","Basic "+r.auth)
+            c.outputStream.use { it.write(body) }
+            val code=c.responseCode
+            val bytes=(if(code>=400)c.errorStream else c.inputStream)?.use { input -> val out=java.io.ByteArrayOutputStream(); val b=ByteArray(4096); while(out.size()<262144){val n=input.read(b,0,minOf(b.size,262144-out.size()));if(n<0)break;out.write(b,0,n)};out.toByteArray() } ?: byteArrayOf()
+            val raw=if(code in 200..299) try { MessagePack.newDefaultUnpacker(bytes).use { it.unpackValue().toJson() } } catch(e:Exception){String(bytes,Charsets.UTF_8)} else String(bytes,Charsets.UTF_8)
+            val pretty=try { JSONObject(raw).toString(2) } catch(e:Exception){raw}
+            return "HTTP "+code+" · "+(System.currentTimeMillis()-start)+" ms\n"+pretty
+        } finally { c.disconnect() }
     }
-    private fun connect() {
-        if(!permitted()) return
-        val addr=devices.keys.elementAtOrNull(selector.selectedItemPosition) ?: return note("请先扫描")
-        note("选中设备: " + (deviceLabels[addr] ?: addr))
-        stopScanning()
-        connectDevice(devices[addr] ?: return note("选中设备已失效"))
-    }
-    private fun connectAddress() {
-        if (!permitted()) return
-        val address = bleAddress.text.toString().trim().uppercase()
-        if (!BluetoothAdapter.checkBluetoothAddress(address)) return note("BLE MAC 格式无效")
-        try {
-            val device = manager.adapter.getRemoteDevice(address)
-            connectDevice(device)
-        } catch (e: Exception) { note("直接连接失败: " + e.message) }
-    }
-    private fun connectDevice(device: BluetoothDevice) {
-        stopScanning()
-        tx = null
-        seq = 0
-        chunks = emptyList()
-        gatt?.close()
-        note("尝试 GATT 连接 " + device.address)
-        try { gatt = device.connectGatt(this, false, callbacks, BluetoothDevice.TRANSPORT_LE) }
-        catch (e: Exception) { note("GATT 异常: " + e.message) }
-    }
-    private val callbacks=object: BluetoothGattCallback() {
-        override fun onConnectionStateChange(g:BluetoothGatt,status:Int,newState:Int) {
-            if(status==0&&newState==BluetoothProfile.STATE_CONNECTED) {note("已连接");g.discoverServices()}
-            else {note("断开 status="+status);g.close()}
-        }
-        override fun onServicesDiscovered(g:BluetoothGatt,status:Int) {
-            val s=g.getService(service) ?: return note("缺少 FFFF 服务")
-            tx=s.getCharacteristic(txUuid)
-            val rx=s.getCharacteristic(rxUuid) ?: return note("缺少 FF02")
-            if(tx==null) return note("缺少 FF01")
-            g.setCharacteristicNotification(rx,true)
-            val d=rx.getDescriptor(cccd) ?: return note("缺少 CCCD")
-            if(Build.VERSION.SDK_INT>=33) g.writeDescriptor(d,BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-            else { @Suppress("DEPRECATION") d.value=BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                @Suppress("DEPRECATION") g.writeDescriptor(d) }
-        }
-        override fun onDescriptorWrite(g:BluetoothGatt,d:BluetoothGattDescriptor,status:Int) {
-            if(status==0) {note("Notify 已开启");send(0x1c)} else note("Notify 失败")
-        }
-        override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic,value:ByteArray) {receive(value)}
-        @Suppress("DEPRECATION") override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic) {receive(c.value?:byteArrayOf())}
-    }
-    private fun receive(data:ByteArray) {
-        note("通知 "+data.joinToString(" ") { "%02X".format(it.toInt() and 255) })
-        if(data.isNotEmpty()&&data[0]==0x41.toByte()&&chunks.isNotEmpty()) {note("版本响应收到");sendChunks()}
-    }
-    private fun send(type:Int,payload:ByteArray=byteArrayOf(),control:Int=0) {
-        val c=tx ?: return note("未连接");val g=gatt ?: return
-        val frame=byteArrayOf(type.toByte(),control.toByte(),(seq++).toByte(),payload.size.toByte())+payload
-        if(Build.VERSION.SDK_INT>=33) g.writeCharacteristic(c,frame,BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-        else { @Suppress("DEPRECATION") c.value=frame
-            @Suppress("DEPRECATION") g.writeCharacteristic(c) }
-    }
-    private fun provision() {
-        try {
-            require(tx!=null) {"未连接"}
-            val s=ssid.text.toString().toByteArray();val p=password.text.toString().toByteArray()
-            val ip=host.text.toString();val octets=ip.split('.')
-            require(octets.size==4&&octets.all {it.toIntOrNull() in 0..255}) {"IPv4 无效"}
-            val hex=mac.text.toString().replace(":","")
-            require(hex.matches(Regex("[0-9a-fA-F]{12}"))) {"MAC 无效"}
-            val m=hex.chunked(2).map {it.toInt(16).toByte()}.toByteArray()
-            require((m[0].toInt() and 1)==0&&m.any {it.toInt()!=0}) {"MAC 需为非零单播"}
-            require(s.isNotEmpty()&&s.size<=32&&p.size<=64) {"Wi-Fi 长度无效"}
-            val addr=ip.toByteArray()
-            val body=byteArrayOf(0x42,1,0,0,s.size.toByte())+s+byteArrayOf(p.size.toByte())+p+
-                byteArrayOf(addr.size.toByte())+addr+byteArrayOf(6)+m+byteArrayOf(3)
-            val list=mutableListOf<ByteArray>();var rest=body
-            while(rest.size>16) {list.add(byteArrayOf(rest.size.toByte(),(rest.size shr 8).toByte())+
-                rest.take(14).toByteArray());rest=rest.drop(14).toByteArray()}
-            list.add(rest);chunks=list;chunkIndex=0
-            note("准备发送 "+chunks.size+" 个分片");send(0x1c)
-        } catch(e:Exception) {note("错误 "+e.message)}
-    }
-    private fun sendChunks() {
-        if(chunkIndex>=chunks.size) {chunks=emptyList();note("BLE 配网数据已发送；尚不代表设备已入网。请在路由器 DHCP 列表核对 Wi-Fi STA MAC，再检查 NAS HTTPS/MQTT 日志。");return}
-        val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
-        handler.postDelayed({sendChunks()},600)
-    }
-    override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
 }
