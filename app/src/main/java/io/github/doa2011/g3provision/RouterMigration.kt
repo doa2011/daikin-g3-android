@@ -19,13 +19,14 @@ object RouterMigration {
         override fun check(host: String, key: ByteArray): Int {
             observed = "SHA256:" + Base64.getEncoder().withoutPadding()
                 .encodeToString(MessageDigest.getInstance("SHA-256").digest(key))
-            return if (expected.isNotBlank() && expected == observed) OK else NOT_INCLUDED
+            return if (expected.isNotBlank() && expected == observed) 0 else 1
         }
         override fun getHostKey(): Array<HostKey> = emptyArray()
         override fun getHostKey(host: String, type: String): Array<HostKey> = emptyArray()
         override fun add(hostkey: HostKey, ui: UserInfo?) {}
         override fun remove(host: String, type: String) {}
         override fun remove(host: String, type: String, key: ByteArray) {}
+        override fun getKnownHostsRepositoryID(): String = "G3 pinned host key"
     }
 
     fun apply(host: String, user: String, password: String, fingerprint: String,
@@ -77,7 +78,64 @@ object RouterMigration {
 set -eu
 mkdir -p /root/g3-migration-backup
 [ -f /root/g3-migration-backup/firewall.first ] || cp /etc/config/firewall /root/g3-migration-backup/firewall.first
+for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.${'
+uci set firewall.g3mig_dns_udp=redirect
+uci set firewall.g3mig_dns_udp.name='G3 migration DNS UDP'
+uci set firewall.g3mig_dns_udp.src=lan
+uci set firewall.g3mig_dns_udp.src_ip=$g
+uci set firewall.g3mig_dns_udp.src_dport=53
+uci set firewall.g3mig_dns_udp.dest=lan
+uci set firewall.g3mig_dns_udp.dest_ip=$p
+uci set firewall.g3mig_dns_udp.dest_port=5353
+uci set firewall.g3mig_dns_udp.proto=udp
+uci set firewall.g3mig_dns_udp.target=DNAT
+uci set firewall.g3mig_dns_tcp=redirect
+uci set firewall.g3mig_dns_tcp.name='G3 migration DNS TCP'
+uci set firewall.g3mig_dns_tcp.src=lan
+uci set firewall.g3mig_dns_tcp.src_ip=$g
+uci set firewall.g3mig_dns_tcp.src_dport=53
+uci set firewall.g3mig_dns_tcp.dest=lan
+uci set firewall.g3mig_dns_tcp.dest_ip=$p
+uci set firewall.g3mig_dns_tcp.dest_port=5353
+uci set firewall.g3mig_dns_tcp.proto=tcp
+uci set firewall.g3mig_dns_tcp.target=DNAT
+uci set firewall.g3mig_https=redirect
+uci set firewall.g3mig_https.name='G3 migration HTTPS'
+uci set firewall.g3mig_https.src=lan
+uci set firewall.g3mig_https.src_ip=$g
+uci set firewall.g3mig_https.src_dip=$r
+uci set firewall.g3mig_https.src_dport=443
+uci set firewall.g3mig_https.dest=lan
+uci set firewall.g3mig_https.dest_ip=$p
+uci set firewall.g3mig_https.dest_port=8443
+uci set firewall.g3mig_https.proto=tcp
+uci set firewall.g3mig_https.target=DNAT
+uci set firewall.g3mig_mqtt=redirect
+uci set firewall.g3mig_mqtt.name='G3 migration MQTT TLS'
+uci set firewall.g3mig_mqtt.src=lan
+uci set firewall.g3mig_mqtt.src_ip=$g
+uci set firewall.g3mig_mqtt.src_dip=$r
+uci set firewall.g3mig_mqtt.src_dport=8883
+uci set firewall.g3mig_mqtt.dest=lan
+uci set firewall.g3mig_mqtt.dest_ip=$p
+uci set firewall.g3mig_mqtt.dest_port=18883
+uci set firewall.g3mig_mqtt.proto=tcp
+uci set firewall.g3mig_mqtt.target=DNAT
+uci commit firewall
+/etc/init.d/firewall reload
+echo 'G3-only migration redirects installed.'
+""".trimIndent()+"\n"
+    }
+
+    private fun removeScript()="""
+set -eu
 for s in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do uci -q delete firewall.$s || true; done
+uci commit firewall
+/etc/init.d/firewall reload
+echo 'Only G3 migration redirects removed; unrelated firewall settings preserved.'
+""".trimIndent()+"\n"
+}
+}s || true; done
 uci set firewall.g3mig_dns_udp=redirect
 uci set firewall.g3mig_dns_udp.name='G3 migration DNS UDP'
 uci set firewall.g3mig_dns_udp.src=lan
