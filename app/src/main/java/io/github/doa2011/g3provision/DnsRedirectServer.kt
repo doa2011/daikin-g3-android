@@ -88,21 +88,19 @@ class DnsRedirectServer(
 
     private fun answerOrForward(query: ByteArray, tcpMode: Boolean): ByteArray {
         val q = parseQuestion(query) ?: return query
-        if (q.name in names && q.type == 1) {
-            val ip = InetAddress.getByName(syntheticARecordIp).address
-            require(ip.size == 4) { "合成 DNS 地址必须是 IPv4" }
+        if (q.name in names && (q.type == 1 || q.type == 28)) {
             val header = query.copyOfRange(0, 12)
             header[2] = ((header[2].toInt() or 0x80) and 0xff).toByte()
             header[3] = ((header[3].toInt() or 0x80) and 0xff).toByte()
-            header[6] = 0; header[7] = 1
+            header[6] = 0; header[7] = if (q.type == 1) 1 else 0
             header[8] = 0; header[9] = 0; header[10] = 0; header[11] = 0
-            val answer = byteArrayOf(
-                0xC0.toByte(), 0x0C, 0, 1, 0, 1,
-                0, 0, 0, 20, 0, 4
-            ) + ip
+            val answer = if (q.type == 1) {
+                val ip = InetAddress.getByName(syntheticARecordIp).address
+                require(ip.size == 4) { "合成 DNS 地址必须是 IPv4" }
+                byteArrayOf(0xC0.toByte(), 0x0C, 0, 1, 0, 1, 0, 0, 0, 20, 0, 4) + ip
+            } else byteArrayOf() // Suppress AAAA so the stock client cannot bypass the IPv4 migration endpoint.
             return header + query.copyOfRange(12, q.end) + answer
-        }
-        return forward(query, tcpMode)
+        }        return forward(query, tcpMode)
     }
 
     private data class Question(val name: String, val type: Int, val end: Int)
