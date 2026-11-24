@@ -55,6 +55,11 @@ class OpenWrtModulesTest {
         val deletes = script.lines().filter { it.startsWith("uci -q delete") }
         assertEquals(listOf("dns_udp","dns_tcp","https","mqtt").map { "uci -q delete firewall.g3mig_$it || true" }, deletes)
         assertTrue(script.endsWith("\n"))
-        assertFalse(script.contains("cp "))
+        // Match a shell command, not the suffix of the section name dns_tcp.
+        val copyCommand = Regex("""(?:^|[;|&]\s*)\s*(?:/bin/)?cp(?:\s|$)""")
+        assertFalse(script.lines().any { copyCommand.containsMatchIn(it) })
+        assertTrue(copyCommand.containsMatchIn("cp /tmp/backup /etc/config/firewall"))
+        assertTrue(copyCommand.containsMatchIn("test -f /tmp/backup && cp /tmp/backup /etc/config/firewall"))
+        assertFalse(copyCommand.containsMatchIn("uci -q delete firewall.g3mig_dns_tcp || true"))
     }
 }
