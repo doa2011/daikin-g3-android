@@ -16,6 +16,22 @@ import java.net.Socket
 object RouterBootstrap {
     data class Result(val output: String, val sessionId: String = "", val hostFingerprint: String = "")
 
+    /** Supplies the already-entered password to JSch's password and keyboard-interactive callbacks. */
+    private class PasswordAuth(private val secret: String) : UserInfo, com.jcraft.jsch.UIKeyboardInteractive {
+        override fun getPassword(): String = secret
+        override fun getPassphrase(): String? = null
+        override fun promptPassword(message: String): Boolean = true
+        override fun promptPassphrase(message: String): Boolean = false
+        override fun promptYesNo(message: String): Boolean = false
+        override fun showMessage(message: String) {}
+        override fun promptKeyboardInteractive(
+            destination: String, name: String, instruction: String,
+            prompt: Array<String>, echo: BooleanArray
+        ): Array<String> = Array(prompt.size) { index ->
+            if (index < echo.size && echo[index]) "" else secret
+        }
+    }
+
     private class AcceptHostKey : HostKeyRepository {
         var fingerprint: String = ""
         override fun check(host: String, key: ByteArray): Int {
@@ -125,9 +141,10 @@ object RouterBootstrap {
         val keys = AcceptHostKey()
         val session = JSch().getSession(user,host,22)
         session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
         session.hostKeyRepository = keys
         session.setConfig("StrictHostKeyChecking","yes")
-        session.setConfig("PreferredAuthentications","password,keyboard-interactive")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
         try {
             try {
                 session.connect(15000)
