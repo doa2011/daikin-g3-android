@@ -12,7 +12,7 @@ import java.util.Base64
 
 /** Per-device OpenWrt redirects. No global DNS or DHCP settings are changed. */
 object RouterMigration {
-    data class Result(val output: String, val fingerprint: String)
+    data class Result(val output: String, val fingerprint: String, val sessionId: String = "")
     private class PinRepository(private val expected: String) : HostKeyRepository {
         var observed = ""
         override fun check(host: String, key: ByteArray): Int {
@@ -36,7 +36,7 @@ object RouterMigration {
     fun applySession(host: String, user: String, password: String, fingerprint: String,
                      routerIp: String, phoneIp: String, g3Ip: String): Result {
         val plan = RouterSessionPlan.create(routerIp, phoneIp, g3Ip)
-        return executeSessionScript(host, user, password, fingerprint, plan.applyScript())
+        return executeSessionScript(host, user, password, fingerprint, plan.applyScript()).copy(sessionId = plan.id)
     }
 
     /** Remove only the sections owned by the supplied session id. */
