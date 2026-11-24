@@ -88,6 +88,7 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
         layout.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
         layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
+        layout.addView(Button(this).apply { text="查看 MQTT 链路诊断（最近100条）"; setOnClickListener { showMqttDiagnostics() } })
         layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
         layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
         root.addView(ScrollView(this).apply {
@@ -511,6 +512,11 @@ class MainActivity : Activity() {
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
     }
 
+
+    private fun showMqttDiagnostics() {
+        val log=getSharedPreferences("g3",0).getString("mqtt_diag","").orEmpty()
+        note(if(log.isBlank()) "尚无 MQTT 诊断事件。请先启动手机服务，再让 G3 配网并连接网关。" else "MQTT 链路诊断（最近100条）\\n"+log)
+    }
 
     private fun showGatewayAcks() {
         val acks = getSharedPreferences("g3", 0).getStringSet("gateway_acks", emptySet()) ?: emptySet()
