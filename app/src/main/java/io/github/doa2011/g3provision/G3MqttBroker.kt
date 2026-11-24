@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 
 /**
  * Small MQTT 3.1.1 TLS broker for the bounded G3 migration workflow.
@@ -52,7 +53,7 @@ class G3MqttBroker(
                     socket.soTimeout = 120000
                     val client = Client(socket)
                     clients.add(client)
-                    diag("TLS client accepted remote=${socket.inetAddress.hostAddress}")
+                    diag("TCP client accepted remote=${socket.inetAddress.hostAddress}")
                     workers.execute { client.run() }
                 } catch (_: Exception) {
                     if (running) { /* accept loop remains available for the next connection */ }
@@ -99,6 +100,14 @@ class G3MqttBroker(
 
         fun run() {
             try {
+                try {
+                    val tls = socket as SSLSocket
+                    tls.startHandshake()
+                    diag("TLS handshake OK protocol=${tls.session.protocol}")
+                } catch (e: Exception) {
+                    diag("TLS handshake FAILED type=${e.javaClass.simpleName}")
+                    return
+                }
                 while (active && running) {
                     val header = input.read()
                     if (header < 0) break
@@ -109,7 +118,9 @@ class G3MqttBroker(
                     handle(header, body)
                 }
             } catch (_: EOFException) {
-            } catch (_: Exception) {
+                diag("MQTT peer EOF")
+            } catch (e: Exception) {
+                diag("MQTT connection ERROR type=${e.javaClass.simpleName}")
             } finally { close() }
         }
 
@@ -172,7 +183,7 @@ class G3MqttBroker(
             val packetId = if (qos == 1) c.readUnsignedShort() else 0
             val payload = c.readBytes(c.remaining())
             if (qos == 1) writePacket(0x40, byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()))
-            diag("MQTT PUBLISH clientId=$clientId topic=$topic bytes=${payload.size}")
+            diag("MQTT PUBLISH RX clientId=$clientId topic=$topic bytes=${payload.size}")
             val responseTopic = responseTopic(topic) ?: run { diag("MQTT IGNORE unmatched request topic=$topic"); return }
             if (payload.size > 8192) return
             val raw = String(payload, StandardCharsets.UTF_8)
@@ -186,7 +197,9 @@ class G3MqttBroker(
             val packet = if (qos == 1) byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()) else byteArrayOf()
             val body = byteArrayOf((topicBytes.size ushr 8).toByte(), topicBytes.size.toByte()) + topicBytes + packet + data
             synchronized(output) {
+                check(active) { "MQTT client closed" }
                 writePacketLocked(0x30 or (qos shl 1), body)
+                diag("MQTT PUBLISH TX topic=$topic bytes=${data.size} qos=$qos")
             }
         }
 
@@ -206,6 +219,7 @@ class G3MqttBroker(
             if (!active) return
             active = false
             clients.remove(this)
+            diag("TCP client disconnected")
             try { socket.close() } catch (_: Exception) {}
         }
 
@@ -241,7 +255,7 @@ class G3MqttBroker(
                 onAckState(acknowledgedTopics())
             } else { diag("MQTT ACK BLOCKED: device has not subscribed response=$responseTopic") }
         } catch (e: Exception) {
-            diag("MQTT ACK ERROR request=$requestTopic error=${e.javaClass.simpleName}:${e.message}")
+            diag("MQTT ACK ERROR request=$requestTopic error=${e.javaClass.simpleName}")
         }
     }
 
