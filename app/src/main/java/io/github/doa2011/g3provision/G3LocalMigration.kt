@@ -282,7 +282,7 @@ class G3MigrationService:Service() {
             server?.stop();server=G3HttpsServer(MigrationPorts.HTTPS,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
-            broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl) { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() };broker?.start()
+            broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl, onAckState = { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() }, onDiagnostic = { line -> appendMqttDiagnostic(line) });broker?.start()
             dns=DnsRedirectServer(host,host).also { it.start() }
             getSharedPreferences("g3",0).edit().putString("service_state","DNS TCP/UDP ${MigrationPorts.DNS} + HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} running").apply()
         } catch(e:Exception) {
@@ -293,6 +293,14 @@ class G3MigrationService:Service() {
         }
         return START_NOT_STICKY
     }
+    @Synchronized private fun appendMqttDiagnostic(line: String) {
+        val prefs=getSharedPreferences("g3",0)
+        val previous=prefs.getString("mqtt_diag","").orEmpty().lines().filter { it.isNotBlank() }
+        val timestamp=java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        val updated=(previous + "$timestamp $line").takeLast(100)
+        prefs.edit().putString("mqtt_diag",updated.joinToString("\n")).apply()
+    }
+
     private fun stopNetworkServices() {
         try { dns?.stop() } finally { dns=null }
         try { broker?.stop() } finally { broker=null }
