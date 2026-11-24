@@ -531,9 +531,100 @@ class MainActivity : Activity() {
     }
 
 
+    private var mqttDialog: android.app.AlertDialog? = null
+    private var mqttExportSnapshot: String? = null
+
     private fun showMqttDiagnostics() {
-        val log=getSharedPreferences("g3",0).getString("mqtt_diag","").orEmpty()
-        note(if(log.isBlank()) "尚无 MQTT 诊断事件。请先启动手机服务，再让 G3 配网并连接网关。" else "MQTT 链路诊断（最近100条）\\n"+log)
+        mqttDialog?.dismiss()
+        val prefs = getSharedPreferences("g3", 0)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 8, 16, 8)
+        }
+        val categories = listOf("全部", "TCP/TLS", "CONNECT", "SUBSCRIBE", "PUBLISH/RX/TX", "异常/拒绝")
+        val category = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
+        }
+        val search = EditText(this).apply { hint = "搜索主题或日志"; isSingleLine = true }
+        val pause = CheckBox(this).apply { text = "暂停显示（后台仍记录）" }
+        val summary = TextView(this)
+        val log = TextView(this).apply { setTextIsSelectable(true); textSize = 12f }
+        val scroll = ScrollView(this).apply { addView(log) }
+        panel.addView(category)
+        panel.addView(search)
+        panel.addView(pause)
+        panel.addView(summary)
+        val actions = LinearLayout(this)
+        panel.addView(actions)
+        panel.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        var snapshot = ""
+        fun readSnapshot(): String = prefs.getString("mqtt_diag", "").orEmpty()
+            .lineSequence().filter { it.isNotBlank() }.toList().takeLast(100)
+            .joinToString("\n").takeLast(65536)
+        fun render() {
+            if (!pause.isChecked) snapshot = readSnapshot()
+            val query = search.text.toString().trim()
+            val terms = when (category.selectedItemPosition) {
+                1 -> listOf("TCP", "TLS")
+                2 -> listOf("CONNECT")
+                3 -> listOf("SUBSCRIBE")
+                4 -> listOf("PUBLISH", " RX", " TX")
+                5 -> listOf("fail", "error", "reject", "exception", "失败", "拒绝")
+                else -> emptyList()
+            }
+            val lines = snapshot.lineSequence().filter { it.isNotBlank() }.filter { line ->
+                (terms.isEmpty() || terms.any { line.contains(it, ignoreCase = true) }) &&
+                    line.contains(query, ignoreCase = true)
+            }.toList()
+            val visible = lines.joinToString("\n")
+            if (log.text.toString() != visible) log.text = visible
+            summary.text = "显示 ${lines.size} 条；" + if (pause.isChecked) "已暂停" else "每秒刷新"
+        }
+        fun action(label: String, block: () -> Unit) {
+            actions.addView(Button(this).apply {
+                text = label
+                setOnClickListener { block() }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        action("复制") {
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MQTT", log.text))
+        }
+        action("导出") {
+            mqttExportSnapshot = log.text.toString()
+            val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(android.content.Intent.CATEGORY_OPENABLE)
+                .setType("text/plain")
+                .putExtra(android.content.Intent.EXTRA_TITLE, "g3-mqtt-diagnostics.txt")
+            startActivityForResult(intent, 302)
+        }
+        action("清空") {
+            android.app.AlertDialog.Builder(this).setMessage("清空历史 MQTT 日志？不会重置网关应答状态。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("清空") { _, _ ->
+                    prefs.edit().remove("mqtt_diag").apply()
+                    snapshot = ""
+                    render()
+                }.show()
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("MQTT 实时诊断")
+            .setView(panel).setPositiveButton("关闭", null).create()
+        val refresh = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing || isFinishing || isDestroyed) return
+                render()
+                handler.postDelayed(this, 1000L)
+            }
+        }
+        dialog.setOnDismissListener {
+            handler.removeCallbacks(refresh)
+            if (mqttDialog === dialog) mqttDialog = null
+        }
+        mqttDialog = dialog
+        dialog.show()
+        dialog.window?.setLayout(-1, -1)
+        refresh.run()
     }
 
     private fun showGatewayAcks() {
@@ -583,6 +674,21 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Android")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 302) {
+            val snapshot = mqttExportSnapshot
+            mqttExportSnapshot = null
+            if (resultCode == RESULT_OK && data?.data != null && snapshot != null) {
+                try {
+                    requireNotNull(contentResolver.openOutputStream(data.data!!, "wt")).use {
+                        it.write(snapshot.toByteArray(Charsets.UTF_8))
+                    }
+                    note("MQTT TXT 导出成功")
+                } catch (e: Exception) {
+                    note("MQTT TXT 导出失败：" + e.javaClass.simpleName)
+                }
+            }
+            return
+        }
         if (requestCode != 301 || resultCode != RESULT_OK || data?.data == null) return
         try {
             val dst = java.io.File(filesDir, "selected-g3-esp32.bin")
@@ -626,5 +732,5 @@ class MainActivity : Activity() {
         if(send(0x4d,chunk.payload,chunk.control)) { note("BLE 分片 ${chunkIndex+1}/${chunks.size} seq=${(seq+255) and 255} control=${chunk.control} len=${chunk.payload.size}"); chunkIndex++ }
         else provisioningSending=false
     }
-    override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
+    override fun onDestroy() { mqttDialog?.dismiss(); handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
 }
