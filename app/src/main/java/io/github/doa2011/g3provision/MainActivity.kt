@@ -62,8 +62,7 @@ class MainActivity : Activity() {
     private lateinit var g3Ip: EditText
     private lateinit var sshUser: EditText
     private lateinit var sshPassword: EditText
-    private lateinit var sshFingerprint: EditText
-    private var routerSessionId: String? = null
+        private var routerSessionId: String? = null
     private lateinit var mac: EditText
     private lateinit var firmwareVersion: EditText
     private var firmwareFile: java.io.File? = null
@@ -78,7 +77,7 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选，支持直接连接）")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); g3Ip = field("G3 当前 DHCP IPv4（确认后填写）"); sshUser = field("OpenWrt SSH 用户名", "root"); sshPassword = field("OpenWrt SSH 密码").apply { inputType = 129 }; sshFingerprint = field("SSH 主机指纹（自动学习，可留空）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        host = field("OpenWrt 路由器 IPv4", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); g3Ip = field("G3 当前 DHCP IPv4（确认后填写）"); sshUser = field("OpenWrt SSH 用户名", "root"); sshPassword = field("OpenWrt SSH 密码").apply { inputType = 129 }; mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
         layout.addView(Button(this).apply { text="OpenWrt：安装 G3 专用临时转发规则（SSH）"; setOnClickListener { installRouterSession() } })
         layout.addView(Button(this).apply { text="OpenWrt：删除本次临时转发规则"; setOnClickListener { removeRouterSession() } })
         layout.addView(Button(this).apply { text="④ 配网后读取 DHCP 租约并绑定 G3"; setOnClickListener { discoverAndBindG3() } })
@@ -116,16 +115,16 @@ class MainActivity : Activity() {
         val router = host.text.toString().trim()
         val user = sshUser.text.toString().trim()
         val secret = sshPassword.text.toString()
-        val phone = currentWifiIpv4().ifBlank { phoneIp.text.toString().trim() }
+        val phone = currentWifiIpv4()
         if (routerSessionId != null) { note("已有活动会话；请先清理或检查路由器状态。"); return }
         if (router.isBlank() || user.isBlank() || secret.isBlank()) { note("安装前只需要填写 OpenWrt 路由器 IP、SSH 用户名和密码。"); return }
         if (phone.isBlank()) { note("无法自动获取手机 Wi-Fi IPv4，请连接 OpenWrt Wi-Fi 后重试。"); return }
         note("正在连接 OpenWrt，预安装本次迁移的禁用规则模板；此时不需要 G3 IP/MAC。")
         Thread {
             try {
-                val result = RouterMigration.prepareSession(router,user,secret,router,phone)
+                val result = RouterBootstrap.prepare(router,user,secret,phone)
                 routerSessionId = result.sessionId
-                note("OpenWrt 会话准备成功。四条规则已创建但保持 disabled，不会影响现有设备流量。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥已自动学习，无需手工核验。")
+                note("OpenWrt 会话准备成功。四条规则已创建但保持 disabled，不会影响现有设备流量。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥已自动接受并记录，无需手工核验。")
             } catch (e: Exception) { note("OpenWrt 会话准备失败：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
@@ -139,7 +138,7 @@ class MainActivity : Activity() {
         note("正在删除本次会话的临时规则……")
         Thread {
             try {
-                val result = RouterMigration.removePreparedSession(router,user,secret,id)
+                val result = RouterBootstrap.cleanup(router,user,secret,id)
                 routerSessionId = null
                 note("本次 OpenWrt 会话规则已清理。\n" + result.output)
             } catch (e: Exception) { note("清理失败，保留会话 ID 供重试：" + (e.message ?: e.javaClass.simpleName)) }
@@ -155,7 +154,7 @@ class MainActivity : Activity() {
         note("正在读取 OpenWrt DHCP 租约……")
         Thread {
             try {
-                val result = RouterMigration.discoverDhcpLeases(router,user,secret)
+                val result = RouterBootstrap.readDhcpLeases(router,user,secret)
                 val rows = result.output.lineSequence().mapNotNull { line ->
                     val p = line.trim().split(Regex("\\s+"))
                     if (p.size >= 4 && p[1].matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) && p[2].matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}"))) Triple(p[1],p[2],p[3]) else null
@@ -170,7 +169,7 @@ class MainActivity : Activity() {
                             g3Ip.setText(selected.second)
                             Thread {
                                 try {
-                                    val bound = RouterMigration.bindSession(router,user,secret,id,selected.second)
+                                    val bound = RouterBootstrap.bind(router,user,secret,id,selected.second)
                                     note("已将 G3 DHCP 身份绑定到本次会话：MAC=" + selected.first + "，IP=" + selected.second + "\n" + bound.output)
                                 } catch (e: Exception) { note("绑定 G3 DHCP 地址失败：" + (e.message ?: e.javaClass.simpleName)) }
                             }.start()
