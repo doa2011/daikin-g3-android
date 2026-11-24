@@ -22,10 +22,10 @@ object RouterBootstrap {
             return HostKeyRepository.OK
         }
         override fun getHostKey(): Array<HostKey> = emptyArray()
-        override fun getHostKey(host: String, type: String): Array<HostKey> = emptyArray()
+        override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
         override fun add(hostkey: HostKey, ui: UserInfo?) {}
-        override fun remove(host: String, type: String) {}
-        override fun remove(host: String, type: String, key: ByteArray) {}
+        override fun remove(host: String?, type: String?) {}
+        override fun remove(host: String?, type: String?, key: ByteArray?) {}
         override fun getKnownHostsRepositoryID(): String = "G3 automatic SSH host key acceptance"
     }
 

@@ -20,10 +20,10 @@ object RouterMigration {
             return if (expected.isNotBlank() && expected == observed) 0 else 1
         }
         override fun getHostKey(): Array<HostKey> = emptyArray()
-        override fun getHostKey(host: String, type: String): Array<HostKey> = emptyArray()
+        override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
         override fun add(hostkey: HostKey, ui: UserInfo?) {}
-        override fun remove(host: String, type: String) {}
-        override fun remove(host: String, type: String, key: ByteArray) {}
+        override fun remove(host: String?, type: String?) {}
+        override fun remove(host: String?, type: String?, key: ByteArray?) {}
         override fun getKnownHostsRepositoryID(): String = "G3 pinned host key"
     }
 
