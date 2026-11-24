@@ -59,6 +59,11 @@ class MainActivity : Activity() {
     private lateinit var host: EditText
     private lateinit var phoneIp: EditText
     private lateinit var deviceStaMac: EditText
+    private lateinit var g3Ip: EditText
+    private lateinit var sshUser: EditText
+    private lateinit var sshPassword: EditText
+    private lateinit var sshFingerprint: EditText
+    private var routerSessionId: String? = null
     private lateinit var mac: EditText
     private lateinit var firmwareVersion: EditText
     private var firmwareFile: java.io.File? = null
@@ -73,7 +78,9 @@ class MainActivity : Activity() {
         selector = Spinner(this); layout.addView(selector)
         bleAddress = field("BLE MAC（可选，支持直接连接）")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); g3Ip = field("G3 当前 DHCP IPv4（确认后填写）"); sshUser = field("OpenWrt SSH 用户名", "root"); sshPassword = field("OpenWrt SSH 密码").apply { inputType = 129 }; sshFingerprint = field("OpenWrt SSH 主机指纹（SHA256:...，首次连接前从可信渠道核验）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        layout.addView(Button(this).apply { text="OpenWrt：安装 G3 专用临时转发规则（SSH）"; setOnClickListener { installRouterSession() } })
+        layout.addView(Button(this).apply { text="OpenWrt：删除本次临时转发规则"; setOnClickListener { removeRouterSession() } })
         layout.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
         layout.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
@@ -103,6 +110,47 @@ class MainActivity : Activity() {
             note("内置 G3 固件不可用：" + (e.message ?: e.javaClass.simpleName) + "。请重新安装完整 APK。")
         }
     }
+
+    private fun installRouterSession() {
+        val router = host.text.toString().trim()
+        val phone = phoneIp.text.toString().trim()
+        val target = g3Ip.text.toString().trim()
+        val user = sshUser.text.toString().trim()
+        val secret = sshPassword.text.toString()
+        val pin = sshFingerprint.text.toString().trim()
+        if (routerSessionId != null) { note("已有活动会话 ID；请先清理或核实路由器状态。"); return }
+        if (listOf(router,phone,target,user,secret).any { it.isBlank() } || !pin.startsWith("SHA256:")) {
+            note("请填写路由器地址、手机 IPv4、G3 DHCP IPv4、SSH 用户名/密码及已核验的 SHA256 主机指纹。"); return
+        }
+        note("正在通过 SSH 安装 G3 专用临时转发规则……")
+        Thread {
+            try {
+                val result = RouterMigration.applySession(router,user,secret,pin,router,phone,target)
+                routerSessionId = result.sessionId
+                note("OpenWrt 临时规则安装成功；sessionId=" + result.sessionId + "\n" + result.output + "\n主机指纹：" + result.fingerprint)
+            } catch (e: Exception) { note("OpenWrt 安装失败：" + (e.message ?: e.javaClass.simpleName)) }
+        }.start()
+    }
+
+    private fun removeRouterSession() {
+        val id = routerSessionId
+        if (id.isNullOrBlank()) { note("本机没有记录活动会话 ID；为避免误删其他规则，拒绝自动清理。"); return }
+        val router = host.text.toString().trim()
+        val phone = phoneIp.text.toString().trim()
+        val target = g3Ip.text.toString().trim()
+        val user = sshUser.text.toString().trim()
+        val secret = sshPassword.text.toString()
+        val pin = sshFingerprint.text.toString().trim()
+        note("正在通过 SSH 清理本次会话规则……")
+        Thread {
+            try {
+                val result = RouterMigration.removeSession(router,user,secret,pin,router,phone,target,id)
+                routerSessionId = null
+                note("本次 OpenWrt 临时规则已清理。\n" + result.output)
+            } catch (e: Exception) { note("OpenWrt 清理失败，保留会话 ID 供重试：" + (e.message ?: e.javaClass.simpleName)) }
+        }.start()
+    }
+
     private fun requiredBlePermissions(): Array<String> =
         if(Build.VERSION.SDK_INT>=31) arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
