@@ -99,7 +99,7 @@ internal class RouterSessionPlan(val id: String, val routerIp: String, val phone
             "USE_PROCD=0",
             "start() {",
             "  [ -f '$cleanup' ] || return 1",
-            "  if [ -f '$pid' ] && kill -0 "$(cat '$pid')" 2>/dev/null; then return 0; fi",
+            "  if [ -f '$pid' ] && kill -0 \"$(cat '$pid')\" 2>/dev/null; then return 0; fi",
             "  ( sleep $ttlSeconds; while :; do",
             "      if /bin/sh '$cleanup'; then",
             "        rm -f '$pid' '$cleanup' '$service' '/etc/rc.d/S99g3mig_$id' '/etc/rc.d/K01g3mig_$id'",
@@ -110,7 +110,7 @@ internal class RouterSessionPlan(val id: String, val routerIp: String, val phone
             "  echo $! > '$pid'",
             "}",
             "stop() {",
-            "  if [ -f '$pid' ]; then kill "$(cat '$pid')" 2>/dev/null || true; rm -f '$pid'; fi",
+            "  if [ -f '$pid' ]; then kill \"$(cat '$pid')\" 2>/dev/null || true; rm -f '$pid'; fi",
             "}"
         ).joinToString("\n")
         return listOf(
