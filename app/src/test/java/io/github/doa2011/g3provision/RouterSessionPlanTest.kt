@@ -20,6 +20,21 @@ class RouterSessionPlanTest {
         assertEquals(3,a.removable(altered).size)
         assertEquals(RouterSessionPlan.Installation.CONFLICT,a.assess(mapOf(a.rules.first().section to a.rules.first())))
     }
+    @Test fun scriptsAreSessionScopedTransactionalAndOwnerChecked() {
+        val a=plan()
+        val b=plan()
+        val apply=a.applyScript()
+        assertTrue(apply.contains("/root/g3-migration-${a.id}.firewall.bak"))
+        assertTrue(apply.contains("trap rollback EXIT HUP INT TERM"))
+        assertTrue(apply.contains("uci commit firewall"))
+        assertTrue(apply.contains("g3mig_owner='${a.id}'"))
+        assertFalse(apply.contains(b.id))
+        val cleanup=a.cleanupScript()
+        assertTrue(cleanup.contains("owner=\\"\$(uci -q get"))
+        assertTrue(cleanup.contains("!= '${a.id}'"))
+        assertTrue(cleanup.contains("uci -q delete"))
+        assertFalse(cleanup.contains("uci revert firewall"))
+    }
     @Test(expected=IllegalArgumentException::class) fun rejectsInjectedAddress() {
         RouterSessionPlan.create("192.168.1.1","192.168.1.2;echo x","192.168.1.3")
     }
