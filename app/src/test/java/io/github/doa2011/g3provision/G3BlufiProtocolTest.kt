@@ -48,11 +48,22 @@ class G3BlufiProtocolTest {
         )
     }
 
+    @Test fun acceptsNonzeroLocallyAdministeredUnicastMac() {
+        val body = G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.99.1", "02:00:00:00:00:00")
+        assertArrayEquals(byteArrayOf(6, 2, 0, 0, 0, 0, 0, 3), body.takeLast(8).toByteArray())
+    }
+
     @Test fun rejectsInvalidGatewayMacAndIp() {
         try {
-            G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.99.1", "02:00:00:00:00:00")
+            G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.99.1", "00:00:00:00:00:00")
             fail("zero gateway MAC should be rejected")
         } catch (_: IllegalArgumentException) {}
+        for (invalid in listOf("01:00:00:00:00:01", "FF:FF:FF:FF:FF:FF", "02000000000", "GG0000000001")) {
+            try {
+                G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.99.1", invalid)
+                fail("invalid gateway MAC should be rejected: $invalid")
+            } catch (_: IllegalArgumentException) {}
+        }
         try {
             G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.999.1", "02:00:00:00:00:01")
             fail("invalid IPv4 should be rejected")
