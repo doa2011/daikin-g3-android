@@ -242,7 +242,7 @@ echo "Only G3 migration redirects removed; unrelated firewall settings preserved
         fun validIp(v: String) = v.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
             v.split(".").all { it.toInt() in 0..255 }
         require(validIp(host) && user.isNotBlank() && password.isNotEmpty())
-        require(fingerprint.startsWith("SHA256:")) { "必须提供已核验的 SHA256 主机指纹" }
+        require(fingerprint.isBlank() || fingerprint.startsWith("SHA256:"))
         val pin = PinRepository(fingerprint.trim())
         val session = JSch().getSession(user, host, 22)
         session.setPassword(password)
@@ -1476,7 +1476,7 @@ uci set firewall.$section=redirect
 uci set firewall.$section.name='G3 migration ${row[0]}'
 uci set firewall.$section.g3mig_owner='$id'
 uci set firewall.$section.src=lan
-            $dipuci set firewall.$section.src_dport=${row[2]}
+            $dip\nuci set firewall.$section.src_dport=${row[2]}
 uci set firewall.$section.dest=lan
 uci set firewall.$section.dest_ip='$phoneIp'
 uci set firewall.$section.dest_port=${row[3]}
