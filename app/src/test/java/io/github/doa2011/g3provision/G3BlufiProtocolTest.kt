@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class G3BlufiProtocolTest {
+    @Test fun gatewayOnlyMatchesUpstreamSingleFrame() {
+        val body = G3BlufiProtocol.buildGatewayConfig("02:00:00:00:00:01")
+        assertArrayEquals(byteArrayOf(0x42, 3, 0, 0, 6, 2, 0, 0, 0, 0, 1, 3), body)
+        val chunk = G3BlufiProtocol.fragment(body).single()
+        assertEquals(0, chunk.control)
+        assertArrayEquals(byteArrayOf(0x4d, 0, 1, 12, 0x42, 3, 0, 0, 6, 2, 0, 0, 0, 0, 1, 3),
+            G3BlufiProtocol.frame(0x4d, chunk.control, 1, chunk.payload))
+    }
+
+    @Test fun gatewayOnlyRejectsInvalidMac() {
+        for (invalid in listOf("000000000000", "010000000001", "FFFFFFFFFFFF", "bad")) {
+            try { G3BlufiProtocol.buildGatewayConfig(invalid); fail("invalid MAC accepted") }
+            catch (_: IllegalArgumentException) {}
+        }
+    }
+
     @Test fun wifiBodyMatchesUpstreamFieldOrder() {
         val actual = G3BlufiProtocol.buildWifiConfig("ab", "pw", "192.168.99.1", "02:00:00:00:00:01")
         val expected = byteArrayOf(

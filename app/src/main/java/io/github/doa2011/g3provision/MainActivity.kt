@@ -87,6 +87,7 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
         layout.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
         layout.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
+        layout.addView(Button(this).apply { text="仅补发虚拟网关 MAC（已配网，短按网络键后连接）"; setOnClickListener { provision(gatewayOnly=true) } })
         layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
         layout.addView(Button(this).apply { text="查看 MQTT 链路诊断（最近100条）"; setOnClickListener { showMqttDiagnostics() } })
         layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
@@ -600,14 +601,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun provision() {
+    private fun provision(gatewayOnly: Boolean = false) {
         try {
             require(tx!=null && gatt!=null) {"未连接"}
             require(!provisioningSending && !pendingProvision && !writeInFlight) {"BLE 写入进行中"}
-            val body=G3BlufiProtocol.buildWifiConfig(ssid.text.toString(),password.text.toString(),host.text.toString().trim(),mac.text.toString())
+            val body=if(gatewayOnly) G3BlufiProtocol.buildGatewayConfig(mac.text.toString()) else G3BlufiProtocol.buildWifiConfig(ssid.text.toString(),password.text.toString(),host.text.toString().trim(),mac.text.toString())
             chunks=G3BlufiProtocol.fragment(body)
             chunkIndex=0
-            note("准备发送 "+chunks.size+" 个分片")
+            note((if(gatewayOnly) "仅补发网关 MAC：" else "完整配网：")+"准备发送 "+chunks.size+" 个分片")
             pendingProvision=true
             requestBlufiVersion(retry=true)
             if(!blufiVersionRequested) pendingProvision=false

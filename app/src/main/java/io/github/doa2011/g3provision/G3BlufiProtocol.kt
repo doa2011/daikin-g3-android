@@ -26,12 +26,7 @@ internal object G3BlufiProtocol {
         val ipBytes = canonicalIp.toByteArray(StandardCharsets.US_ASCII)
         require(ipBytes.size in 7..15) { "网关 IPv4 地址长度无效" }
 
-        val compactMac = gatewayMac.replace(":", "").replace("-", "").uppercase()
-        require(compactMac.matches(Regex("[0-9A-F]{12}"))) { "虚拟网关 MAC 必须为 12 位十六进制" }
-        val mac = compactMac.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        require((mac[0].toInt() and 1) == 0 && mac.any { it.toInt() != 0 }) {
-            "虚拟网关 MAC 必须为非零单播地址"
-        }
+        val mac = parseGatewayMac(gatewayMac)
 
         // Keep this byte layout identical to upstream provision_linux.py:
         // 42 01 00 00 | ssid-len | ssid | password-len | password |
@@ -40,6 +35,19 @@ internal object G3BlufiProtocol {
             ssidBytes + byteArrayOf(passwordBytes.size.toByte()) + passwordBytes +
             byteArrayOf(ipBytes.size.toByte()) + ipBytes + byteArrayOf(0x06) + mac + byteArrayOf(0x03)
     }
+
+    private fun parseGatewayMac(gatewayMac: String): ByteArray {
+        val compactMac = gatewayMac.replace(":", "").replace("-", "").uppercase()
+        require(compactMac.matches(Regex("[0-9A-F]{12}"))) { "虚拟网关 MAC 必须为 12 位十六进制" }
+        val mac = compactMac.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        require((mac[0].toInt() and 1) == 0 && mac.any { it.toInt() != 0 }) {
+            "虚拟网关 MAC 必须为非零单播地址"
+        }
+        return mac
+    }
+
+    fun buildGatewayConfig(gatewayMac: String): ByteArray =
+        byteArrayOf(0x42, 0x03, 0x00, 0x00, 0x06) + parseGatewayMac(gatewayMac) + byteArrayOf(0x03)
 
     /**
      * Upstream BLUFi fragmentation: while remaining body > 16 bytes, send
