@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DnsRedirectServer(
     private val upstreamIp: String,
     private val syntheticARecordIp: String,
-    private val port: Int = 1053
+    private val port: Int = MigrationPorts.DNS
 ) {
     private val running = AtomicBoolean(false)
     private var udp: DatagramSocket? = null

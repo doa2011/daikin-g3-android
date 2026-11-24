@@ -432,7 +432,7 @@ class MainActivity : Activity() {
                 .putExtra(G3MigrationService.EXTRA_FIRMWARE_SHA256, image.sha256)
                 .putExtra(G3MigrationService.EXTRA_VERSION, image.version)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
-            note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP 443 转发到手机:8443，TCP 8883 转发到手机:8883。只有五项网关应答完成后才能手动触发 OTA。")
+            note("已请求启动手机 HTTPS/MQTT 服务。OpenWrt 将虚拟 IP TCP ${MigrationPorts.FACTORY_HTTPS} 转发到手机:${MigrationPorts.HTTPS}，TCP ${MigrationPorts.FACTORY_MQTT_TLS} 转发到手机:${MigrationPorts.MQTT_TLS}。只有五项网关应答完成后才能手动触发 OTA。")
         } catch (e: Exception) { note("启动服务参数错误：" + e.message) }
     }
 

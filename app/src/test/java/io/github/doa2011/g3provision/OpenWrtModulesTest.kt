@@ -50,6 +50,28 @@ class OpenWrtModulesTest {
         assertFalse(script.contains("uci set dhcp."))
     }
 
+    @Test fun applyRejectsExistingSectionsBeforeAnyMutation() {
+        val script = RouterMigration.applyScript("192.168.99.1", "192.168.99.2", "192.168.99.3")
+        val firstWrite = script.indexOf("uci set ")
+        assertTrue(firstWrite > 0)
+        assertTrue(script.indexOf("exit 21") in 0 until firstWrite)
+        assertTrue(script.indexOf("exit 22") in 0 until firstWrite)
+        assertFalse(script.contains("uci -q delete "))
+        assertTrue(script.contains("uci changes firewall"))
+    }
+
+    @Test fun factoryAndPhonePortsMatchRedirectContract() {
+        assertEquals(53, MigrationPorts.FACTORY_DNS)
+        assertEquals(443, MigrationPorts.FACTORY_HTTPS)
+        assertEquals(8883, MigrationPorts.FACTORY_MQTT_TLS)
+        assertEquals(1053, MigrationPorts.DNS)
+        assertEquals(8443, MigrationPorts.HTTPS)
+        assertEquals(18883, MigrationPorts.MQTT_TLS)
+        val script = RouterMigration.applyScript("192.168.99.1", "192.168.99.2", "192.168.99.3")
+        assertTrue(script.contains("g3mig_mqtt.src_dport=${MigrationPorts.FACTORY_MQTT_TLS}"))
+        assertTrue(script.contains("g3mig_mqtt.dest_port=${MigrationPorts.MQTT_TLS}"))
+    }
+
     @Test fun cleanupRemovesOnlyFourKnownSectionsAndEndsWithNewline() {
         val script = RouterMigration.removeScript()
         val deletes = script.lines().filter { it.startsWith("uci -q delete") }

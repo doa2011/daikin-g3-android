@@ -251,7 +251,7 @@ class G3MigrationService:Service() {
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
-        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS 8443 + MQTT TLS 8883 服务运行中").setOngoing(true).build()
+        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} 服务运行中").setOngoing(true).build()
         startForeground(41,n)
         if (i?.getBooleanExtra(EXTRA_TRIGGER_OTA,false)==true) {
             val version=i.getStringExtra(EXTRA_VERSION).orEmpty()
@@ -275,11 +275,11 @@ class G3MigrationService:Service() {
             val firmwarePath=i?.getStringExtra(EXTRA_FIRMWARE_PATH).orEmpty()
             val version=i?.getStringExtra(EXTRA_VERSION).orEmpty()
             firmware=if(firmwarePath.isNotBlank()) G3FirmwareValidator.load(File(firmwarePath),version,i?.getStringExtra(EXTRA_FIRMWARE_SHA256)) else null
-            server?.stop();server=G3HttpsServer(8443,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
+            server?.stop();server=G3HttpsServer(MigrationPorts.HTTPS,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl) { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() };broker?.start()
-            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS 8443 + MQTT TLS 8883 running").apply()
+            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} running").apply()
         } catch(e:Exception) {
             getSharedPreferences("g3",0).edit().putString("service_state","ERROR: "+(e.message?:e.javaClass.simpleName)).apply()
             stopSelf()
