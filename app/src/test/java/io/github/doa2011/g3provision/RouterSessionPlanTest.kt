@@ -40,6 +40,22 @@ class RouterSessionPlanTest {
         assertTrue(cleanup.contains("cleanup_rollback"))
     }
 
+    @Test fun watchdogIsPersistentSessionScopedAndRetriesFailure() {
+        val a = plan()
+        val script = a.watchdogInstallScript(900)
+        assertTrue(script.contains("/etc/init.d/g3mig_${a.id}"))
+        assertTrue(script.contains("/etc/rc.d/S99g3mig_${a.id}"))
+        assertTrue(script.contains("sleep 900"))
+        assertTrue(script.contains("sleep 60"))
+        assertTrue(script.contains("if /bin/sh '/root/g3-migration-${a.id}.cleanup.sh'; then"))
+        assertTrue(script.contains("Session backup missing; watchdog not installed"))
+        assertFalse(script.contains("192.168.1.2"))
+    }
+
+    @Test(expected=IllegalArgumentException::class) fun watchdogRejectsUnsafeTimeout() {
+        plan().watchdogInstallScript(30)
+    }
+
     @Test(expected=IllegalArgumentException::class) fun rejectsInjectedAddress() {
         RouterSessionPlan.create("192.168.1.1","192.168.1.2;echo x","192.168.1.3")
     }
