@@ -5,12 +5,14 @@ import org.junit.Test
 
 class RouterSessionPlanTest {
     private fun plan() = RouterSessionPlan.create("192.168.1.1","192.168.1.2","192.168.1.3")
+
     @Test fun independentNamesAndPorts() {
         val a = plan(); val b = plan()
         assertTrue(a.rules.map { it.section }.intersect(b.rules.map { it.section }.toSet()).isEmpty())
         assertEquals(listOf(1053,1053,8443,18883),a.rules.map { it.internalPort })
         assertEquals(RouterSessionPlan.Installation.CONFLICT,a.assess(b.rules.associateBy { it.section }))
     }
+
     @Test fun idempotenceAndOwnership() {
         val a = plan(); val all = a.rules.associateBy { it.section }
         assertEquals(RouterSessionPlan.Installation.CREATE,a.assess(emptyMap()))
@@ -20,6 +22,24 @@ class RouterSessionPlanTest {
         assertEquals(3,a.removable(altered).size)
         assertEquals(RouterSessionPlan.Installation.CONFLICT,a.assess(mapOf(a.rules.first().section to a.rules.first())))
     }
+
+    @Test fun generatedScriptsAreSessionScopedAndTransactional() {
+        val a=plan()
+        val b=plan()
+        val apply=a.applyScript()
+        assertTrue(apply.contains("/root/g3-migration-${a.id}.firewall.bak"))
+        assertTrue(apply.contains("trap rollback EXIT HUP INT TERM"))
+        assertTrue(apply.contains("g3mig_owner='${a.id}'"))
+        assertTrue(apply.contains("uci commit firewall"))
+        assertFalse(apply.contains(b.id))
+        assertTrue(apply.contains("dest_port=18883"))
+        val cleanup=a.cleanupScript()
+        assertTrue(cleanup.contains("g3mig_owner"))
+        assertTrue(cleanup.contains("!= '${a.id}'"))
+        assertTrue(cleanup.contains("uci -q delete"))
+        assertTrue(cleanup.contains("cleanup_rollback"))
+    }
+
     @Test(expected=IllegalArgumentException::class) fun rejectsInjectedAddress() {
         RouterSessionPlan.create("192.168.1.1","192.168.1.2;echo x","192.168.1.3")
     }
