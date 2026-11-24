@@ -389,7 +389,7 @@ class MainActivity : Activity() {
     private val callbacks=object: BluetoothGattCallback() {
         override fun onConnectionStateChange(g:BluetoothGatt,status:Int,newState:Int) {
             if(status==0&&newState==BluetoothProfile.STATE_CONNECTED) {note("已连接");g.discoverServices()}
-            else {note("断开 status="+status);g.close()}
+            else { handler.post { if(g===gatt) { note("BLE 断开 status=$status，已提交分片 $chunkIndex/${chunks.size}"); gatt=null; tx=null; provisioningSending=false; pendingProvision=false; writeInFlight=false; blufiVersionRequested=false; handler.removeCallbacks(blufiTimeoutRunnable); chunks=emptyList() }; g.close() } }
         }
         override fun onServicesDiscovered(g:BluetoothGatt,status:Int) {
             val s=g.getService(service) ?: return note("缺少 FFFF 服务")
@@ -403,7 +403,7 @@ class MainActivity : Activity() {
                 @Suppress("DEPRECATION") g.writeDescriptor(d) }
         }
         override fun onDescriptorWrite(g:BluetoothGatt,d:BluetoothGattDescriptor,status:Int) {
-            if(status==0) {note("Notify 已开启");handler.post { requestBlufiVersion() }} else note("Notify 失败")
+            if(status==0) {handler.post { if(g===gatt) {note("Notify 已开启");requestBlufiVersion()} }} else note("Notify 失败")
         }
         override fun onCharacteristicWrite(g:BluetoothGatt,c:BluetoothGattCharacteristic,status:Int) {
             handler.post {
@@ -413,17 +413,34 @@ class MainActivity : Activity() {
                     provisioningSending=false; pendingProvision=false; blufiVersionRequested=false
                     handler.removeCallbacks(blufiTimeoutRunnable)
                     note("BLE 写入失败 status=$status；停止发送，请重新连接")
-                } else if(provisioningSending) sendChunks()
+                } else if(provisioningSending) {
+                    val sent = chunkIndex
+                    note("BLE 写入成功：分片 $sent/${chunks.size}")
+                    if(sent == 0) sendChunks()
+                    else if(sent < chunks.size) handler.postDelayed({
+                        if(g===gatt && provisioningSending && chunkIndex==sent) sendChunks()
+                    },500)
+                    else {
+                        note("末片写入成功，等待2秒")
+                        handler.postDelayed({
+                            if(g===gatt && provisioningSending && chunkIndex==sent) {
+                                sendChunks()
+                                note("主动断开 BLE")
+                                g.disconnect()
+                            }
+                        },2000)
+                    }
+                }
             }
         }
-        override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic,value:ByteArray) {if(g===gatt) receive(value)}
-        @Suppress("DEPRECATION") override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic) {receive(c.value?:byteArrayOf())}
+        override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic,value:ByteArray) {if(g===gatt) receive(g,value)}
+        @Suppress("DEPRECATION") override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic) {if(g===gatt) receive(g,c.value?.copyOf()?:byteArrayOf())}
     }
-    private fun receive(data:ByteArray) {
-        note("通知 "+data.joinToString(" ") { "%02X".format(it.toInt() and 255) })
+    private fun receive(g:BluetoothGatt,data:ByteArray) {
+        note("BLE 通知：类型=${data.firstOrNull()?.toInt()?.and(255)} 长度=${data.size}")
         val version=G3BlufiProtocol.parseVersionNotification(data) ?: return
         handler.post {
-            if (!blufiVersionRequested) return@post
+            if (g!==gatt || !blufiVersionRequested) return@post
             handler.removeCallbacks(blufiTimeoutRunnable)
             blufiVersionRequested=false
             blufiVersionReceived=true
@@ -605,7 +622,7 @@ class MainActivity : Activity() {
             return
         }
         val chunk=chunks[chunkIndex]
-        if(send(0x4d,chunk.payload,chunk.control)) chunkIndex++
+        if(send(0x4d,chunk.payload,chunk.control)) { note("BLE 分片 ${chunkIndex+1}/${chunks.size} seq=${(seq+255) and 255} control=${chunk.control} len=${chunk.payload.size}"); chunkIndex++ }
         else provisioningSending=false
     }
     override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
