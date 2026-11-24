@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /** Two-phase OpenWrt setup: stage inert rules before Wi-Fi provisioning, bind after DHCP. */
 object RouterBootstrap {
@@ -111,24 +113,46 @@ object RouterBootstrap {
     }
 
     private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
         val keys = AcceptHostKey()
         val session = JSch().getSession(user,host,22)
         session.setPassword(password)
         session.hostKeyRepository = keys
         session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","password,keyboard-interactive")
         try {
-            session.connect(12000)
-            val channel = session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
             channel.setCommand("sh -s")
             val stdout = ByteArrayOutputStream()
             val stderr = ByteArrayOutputStream()
             channel.setOutputStream(stdout)
             channel.setErrStream(stderr)
-            channel.connect(8000)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
             channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
             val deadline = System.currentTimeMillis() + 25000
             while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
-            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令超时") }
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
             val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
             val code = channel.exitStatus
             channel.disconnect()
