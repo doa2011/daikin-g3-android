@@ -68,194 +68,23 @@ object RouterMigration {
         val p = "'$phone'"; val g = "'$g3'"; val r = "'$router'"
         return """
 set -eu
-# Fail before any mutation if existing sections or unrelated staged changes are present.
-for section in g3mig_dns_udp g3mig_dns_tcp g3mig_https g3mig_mqtt; do
-    if uci -q get "firewall.${'
-uci set firewall.g3mig_dns_udp=redirect
-uci set firewall.g3mig_dns_udp.name="G3 migration DNS UDP"
-uci set firewall.g3mig_dns_udp.src=lan
-uci set firewall.g3mig_dns_udp.src_ip=$g
-uci set firewall.g3mig_dns_udp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_udp.dest=lan
-uci set firewall.g3mig_dns_udp.dest_ip=$p
-uci set firewall.g3mig_dns_udp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_udp.proto=udp
-uci set firewall.g3mig_dns_udp.target=DNAT
-uci set firewall.g3mig_dns_tcp=redirect
-uci set firewall.g3mig_dns_tcp.name="G3 migration DNS TCP"
-uci set firewall.g3mig_dns_tcp.src=lan
-uci set firewall.g3mig_dns_tcp.src_ip=$g
-uci set firewall.g3mig_dns_tcp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_tcp.dest=lan
-uci set firewall.g3mig_dns_tcp.dest_ip=$p
-uci set firewall.g3mig_dns_tcp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_tcp.proto=tcp
-uci set firewall.g3mig_dns_tcp.target=DNAT
-uci set firewall.g3mig_https=redirect
-uci set firewall.g3mig_https.name="G3 migration HTTPS"
-uci set firewall.g3mig_https.src=lan
-uci set firewall.g3mig_https.src_ip=$g
-uci set firewall.g3mig_https.src_dip=$r
-uci set firewall.g3mig_https.src_dport=${MigrationPorts.FACTORY_HTTPS}
-uci set firewall.g3mig_https.dest=lan
-uci set firewall.g3mig_https.dest_ip=$p
-uci set firewall.g3mig_https.dest_port=${MigrationPorts.HTTPS}
-uci set firewall.g3mig_https.proto=tcp
-uci set firewall.g3mig_https.target=DNAT
-uci set firewall.g3mig_mqtt=redirect
-uci set firewall.g3mig_mqtt.name="G3 migration MQTT TLS"
-uci set firewall.g3mig_mqtt.src=lan
-uci set firewall.g3mig_mqtt.src_ip=$g
-uci set firewall.g3mig_mqtt.src_dip=$r
-uci set firewall.g3mig_mqtt.src_dport=${MigrationPorts.FACTORY_MQTT_TLS}
-uci set firewall.g3mig_mqtt.dest=lan
-uci set firewall.g3mig_mqtt.dest_ip=$p
-uci set firewall.g3mig_mqtt.dest_port=${MigrationPorts.MQTT_TLS}
-uci set firewall.g3mig_mqtt.proto=tcp
-uci set firewall.g3mig_mqtt.target=DNAT
-uci commit firewall
-/etc/init.d/firewall reload
-echo "G3-only migration redirects installed."
-""".trimIndent() + "\n"
-    }
-
-    internal fun removeScript(): String = """
-set -eu
-uci -q delete firewall.g3mig_dns_udp || true
-uci -q delete firewall.g3mig_dns_tcp || true
-uci -q delete firewall.g3mig_https || true
-uci -q delete firewall.g3mig_mqtt || true
-uci commit firewall
-/etc/init.d/firewall reload
-echo "Only G3 migration redirects removed; unrelated firewall settings preserved."
-""".trimIndent() + "\n"
-}
-}section" >/dev/null 2>&1; then
-        echo "Existing migration section; refusing to overwrite: ${'
-uci set firewall.g3mig_dns_udp=redirect
-uci set firewall.g3mig_dns_udp.name="G3 migration DNS UDP"
-uci set firewall.g3mig_dns_udp.src=lan
-uci set firewall.g3mig_dns_udp.src_ip=$g
-uci set firewall.g3mig_dns_udp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_udp.dest=lan
-uci set firewall.g3mig_dns_udp.dest_ip=$p
-uci set firewall.g3mig_dns_udp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_udp.proto=udp
-uci set firewall.g3mig_dns_udp.target=DNAT
-uci set firewall.g3mig_dns_tcp=redirect
-uci set firewall.g3mig_dns_tcp.name="G3 migration DNS TCP"
-uci set firewall.g3mig_dns_tcp.src=lan
-uci set firewall.g3mig_dns_tcp.src_ip=$g
-uci set firewall.g3mig_dns_tcp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_tcp.dest=lan
-uci set firewall.g3mig_dns_tcp.dest_ip=$p
-uci set firewall.g3mig_dns_tcp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_tcp.proto=tcp
-uci set firewall.g3mig_dns_tcp.target=DNAT
-uci set firewall.g3mig_https=redirect
-uci set firewall.g3mig_https.name="G3 migration HTTPS"
-uci set firewall.g3mig_https.src=lan
-uci set firewall.g3mig_https.src_ip=$g
-uci set firewall.g3mig_https.src_dip=$r
-uci set firewall.g3mig_https.src_dport=${MigrationPorts.FACTORY_HTTPS}
-uci set firewall.g3mig_https.dest=lan
-uci set firewall.g3mig_https.dest_ip=$p
-uci set firewall.g3mig_https.dest_port=${MigrationPorts.HTTPS}
-uci set firewall.g3mig_https.proto=tcp
-uci set firewall.g3mig_https.target=DNAT
-uci set firewall.g3mig_mqtt=redirect
-uci set firewall.g3mig_mqtt.name="G3 migration MQTT TLS"
-uci set firewall.g3mig_mqtt.src=lan
-uci set firewall.g3mig_mqtt.src_ip=$g
-uci set firewall.g3mig_mqtt.src_dip=$r
-uci set firewall.g3mig_mqtt.src_dport=${MigrationPorts.FACTORY_MQTT_TLS}
-uci set firewall.g3mig_mqtt.dest=lan
-uci set firewall.g3mig_mqtt.dest_ip=$p
-uci set firewall.g3mig_mqtt.dest_port=${MigrationPorts.MQTT_TLS}
-uci set firewall.g3mig_mqtt.proto=tcp
-uci set firewall.g3mig_mqtt.target=DNAT
-uci commit firewall
-/etc/init.d/firewall reload
-echo "G3-only migration redirects installed."
-""".trimIndent() + "\n"
-    }
-
-    internal fun removeScript(): String = """
-set -eu
-uci -q delete firewall.g3mig_dns_udp || true
-uci -q delete firewall.g3mig_dns_tcp || true
-uci -q delete firewall.g3mig_https || true
-uci -q delete firewall.g3mig_mqtt || true
-uci commit firewall
-/etc/init.d/firewall reload
-echo "Only G3 migration redirects removed; unrelated firewall settings preserved."
-""".trimIndent() + "\n"
-}
-}section" >&2
-        exit 21
-    fi
-done
-if [ -n "${'
-uci set firewall.g3mig_dns_udp=redirect
-uci set firewall.g3mig_dns_udp.name="G3 migration DNS UDP"
-uci set firewall.g3mig_dns_udp.src=lan
-uci set firewall.g3mig_dns_udp.src_ip=$g
-uci set firewall.g3mig_dns_udp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_udp.dest=lan
-uci set firewall.g3mig_dns_udp.dest_ip=$p
-uci set firewall.g3mig_dns_udp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_udp.proto=udp
-uci set firewall.g3mig_dns_udp.target=DNAT
-uci set firewall.g3mig_dns_tcp=redirect
-uci set firewall.g3mig_dns_tcp.name="G3 migration DNS TCP"
-uci set firewall.g3mig_dns_tcp.src=lan
-uci set firewall.g3mig_dns_tcp.src_ip=$g
-uci set firewall.g3mig_dns_tcp.src_dport=${MigrationPorts.FACTORY_DNS}
-uci set firewall.g3mig_dns_tcp.dest=lan
-uci set firewall.g3mig_dns_tcp.dest_ip=$p
-uci set firewall.g3mig_dns_tcp.dest_port=${MigrationPorts.DNS}
-uci set firewall.g3mig_dns_tcp.proto=tcp
-uci set firewall.g3mig_dns_tcp.target=DNAT
-uci set firewall.g3mig_https=redirect
-uci set firewall.g3mig_https.name="G3 migration HTTPS"
-uci set firewall.g3mig_https.src=lan
-uci set firewall.g3mig_https.src_ip=$g
-uci set firewall.g3mig_https.src_dip=$r
-uci set firewall.g3mig_https.src_dport=${MigrationPorts.FACTORY_HTTPS}
-uci set firewall.g3mig_https.dest=lan
-uci set firewall.g3mig_https.dest_ip=$p
-uci set firewall.g3mig_https.dest_port=${MigrationPorts.HTTPS}
-uci set firewall.g3mig_https.proto=tcp
-uci set firewall.g3mig_https.target=DNAT
-uci set firewall.g3mig_mqtt=redirect
-uci set firewall.g3mig_mqtt.name="G3 migration MQTT TLS"
-uci set firewall.g3mig_mqtt.src=lan
-uci set firewall.g3mig_mqtt.src_ip=$g
-uci set firewall.g3mig_mqtt.src_dip=$r
-uci set firewall.g3mig_mqtt.src_dport=${MigrationPorts.FACTORY_MQTT_TLS}
-uci set firewall.g3mig_mqtt.dest=lan
-uci set firewall.g3mig_mqtt.dest_ip=$p
-uci set firewall.g3mig_mqtt.dest_port=${MigrationPorts.MQTT_TLS}
-uci set firewall.g3mig_mqtt.proto=tcp
-uci set firewall.g3mig_mqtt.target=DNAT
-uci commit firewall
-/etc/init.d/firewall reload
-echo "G3-only migration redirects installed."
-""".trimIndent() + "\n"
-    }
-
-    internal fun removeScript(): String = """
-set -eu
-uci -q delete firewall.g3mig_dns_udp || true
-uci -q delete firewall.g3mig_dns_tcp || true
-uci -q delete firewall.g3mig_https || true
-uci -q delete firewall.g3mig_mqtt || true
-uci commit firewall
-/etc/init.d/firewall reload
-echo "Only G3 migration redirects removed; unrelated firewall settings preserved."
-""".trimIndent() + "\n"
-}
-}(uci changes firewall)" ]; then
+if uci -q get firewall.g3mig_dns_udp >/dev/null 2>&1; then
+    echo "Existing migration section; refusing to overwrite: g3mig_dns_udp" >&2
+    exit 21
+fi
+if uci -q get firewall.g3mig_dns_tcp >/dev/null 2>&1; then
+    echo "Existing migration section; refusing to overwrite: g3mig_dns_tcp" >&2
+    exit 21
+fi
+if uci -q get firewall.g3mig_https >/dev/null 2>&1; then
+    echo "Existing migration section; refusing to overwrite: g3mig_https" >&2
+    exit 21
+fi
+if uci -q get firewall.g3mig_mqtt >/dev/null 2>&1; then
+    echo "Existing migration section; refusing to overwrite: g3mig_mqtt" >&2
+    exit 21
+fi
+if [ -n "${'$'}(uci changes firewall)" ]; then
     echo "Uncommitted firewall changes; refusing to modify." >&2
     exit 22
 fi
