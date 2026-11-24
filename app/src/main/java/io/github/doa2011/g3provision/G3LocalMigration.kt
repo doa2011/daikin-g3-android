@@ -242,6 +242,7 @@ class G3TlsIdentity(private val service:Service) {
 
 /** Keeps the local HTTPS endpoint alive while Android backgrounds the UI. */
 class G3MigrationService:Service() {
+    private var dns:DnsRedirectServer?=null
     private var server:G3HttpsServer?=null
     private var broker:G3MqttBroker?=null
     private var firmware:G3FirmwareImage?=null
@@ -251,7 +252,7 @@ class G3MigrationService:Service() {
     override fun onStartCommand(i:Intent?,flags:Int,startId:Int):Int {
         val channel="g3-local-migration"
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(channel,"G3 迁移服务",NotificationManager.IMPORTANCE_LOW))
-        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} 服务运行中").setOngoing(true).build()
+        val n=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("G3 本地 HTTPS 服务").setContentText("DNS ${MigrationPorts.DNS} + HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS}").setOngoing(true).build()
         startForeground(41,n)
         if (i?.getBooleanExtra(EXTRA_TRIGGER_OTA,false)==true) {
             val version=i.getStringExtra(EXTRA_VERSION).orEmpty()
@@ -261,6 +262,8 @@ class G3MigrationService:Service() {
             return START_NOT_STICKY
         }
         try {
+            stopNetworkServices()
+            releaseLocks()
             val pm=getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
             cpuLock=pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"G3Migration:CPU").apply{setReferenceCounted(false);acquire()}
             val wm=applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
@@ -271,6 +274,7 @@ class G3MigrationService:Service() {
             val origin=i?.getStringExtra(EXTRA_ORIGIN)?: ""
             require(origin.startsWith("https://")){"origin 必须为 https:// 开头"}
             val host=java.net.URI(origin).host ?: throw IllegalArgumentException("origin host invalid")
+            require(host.split('.').size == 4 && host.split('.').all { it.matches(Regex("0|[1-9][0-9]{0,2}")) && it.toInt() in 0..255 }) { "虚拟服务地址必须为路由器 IPv4" }
             val id=G3TlsIdentity(this).load(host)
             val firmwarePath=i?.getStringExtra(EXTRA_FIRMWARE_PATH).orEmpty()
             val version=i?.getStringExtra(EXTRA_VERSION).orEmpty()
@@ -279,14 +283,27 @@ class G3MigrationService:Service() {
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl) { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() };broker?.start()
-            getSharedPreferences("g3",0).edit().putString("service_state","HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} running").apply()
+            dns=DnsRedirectServer(host,host).also { it.start() }
+            getSharedPreferences("g3",0).edit().putString("service_state","DNS TCP/UDP ${MigrationPorts.DNS} + HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} running").apply()
         } catch(e:Exception) {
+            stopNetworkServices()
+            releaseLocks()
             getSharedPreferences("g3",0).edit().putString("service_state","ERROR: "+(e.message?:e.javaClass.simpleName)).apply()
             stopSelf()
         }
         return START_NOT_STICKY
     }
-    override fun onDestroy(){broker?.stop();broker=null;server?.stop();server=null;try{if(cpuLock?.isHeld==true)cpuLock?.release()}catch(_:Exception){};try{if(wifiLock?.isHeld==true)wifiLock?.release()}catch(_:Exception){};cpuLock=null;wifiLock=null;super.onDestroy()}
+    private fun stopNetworkServices() {
+        try { dns?.stop() } finally { dns=null }
+        try { broker?.stop() } finally { broker=null }
+        try { server?.stop() } finally { server=null; firmware=null }
+    }
+    private fun releaseLocks() {
+        try{if(cpuLock?.isHeld==true)cpuLock?.release()}catch(_:Exception){}
+        try{if(wifiLock?.isHeld==true)wifiLock?.release()}catch(_:Exception){}
+        cpuLock=null;wifiLock=null
+    }
+    override fun onDestroy(){stopNetworkServices();releaseLocks();super.onDestroy()}
     companion object {
         const val EXTRA_MAC="g3_device_mac"
         const val EXTRA_ORIGIN="g3_origin"

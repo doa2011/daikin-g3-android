@@ -44,6 +44,16 @@ class DnsSocketRegressionTest {
             }
         } finally { service.stop() }
     }
+    @Test fun stopReleasesBothListenersForRestart() {
+        val port = ServerSocket(0).use { it.localPort }
+        val service = DnsRedirectServer("127.0.0.1","192.168.1.1",port)
+        repeat(2) {
+            service.start()
+            service.stop()
+            ServerSocket(port).use { assertEquals(port,it.localPort) }
+            DatagramSocket(port).use { assertEquals(port,it.localPort) }
+        }
+    }
     @Test fun occupiedTcpPortReleasesUdpOnFailure() {
         ServerSocket(0).use { blocker ->
             val port = blocker.localPort
