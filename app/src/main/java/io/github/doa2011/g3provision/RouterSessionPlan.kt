@@ -35,65 +35,51 @@ internal class RouterSessionPlan(val id: String, val routerIp: String, val phone
     fun removable(existing: Map<String, Rule>): List<String> =
         rules.filter { existing[it.section] == it }.map { it.section }
 
-    /** Generate a session-scoped UCI transaction. Caller must explicitly execute it over pinned SSH. */
+    /** Generate a session-scoped UCI transaction. Caller explicitly executes it over pinned SSH. */
     fun applyScript(): String {
+        val sh = '$'
         val backup = "/root/g3-migration-$id.firewall.bak"
         val sections = rules.mapIndexed { index, rule ->
             val suffix = listOf("dns_udp", "dns_tcp", "https", "mqtt")[index]
             val sourceDip = rule.originalDestination?.let { "uci set firewall.${rule.section}.src_dip='$it'" } ?: ""
-            listOf(
-                "uci set firewall.${rule.section}=redirect",
+            listOf("uci set firewall.${rule.section}=redirect",
                 "uci set firewall.${rule.section}.name='G3 migration $suffix'",
                 "uci set firewall.${rule.section}.g3mig_owner='$id'",
                 "uci set firewall.${rule.section}.src=lan",
-                "uci set firewall.${rule.section}.src_ip='$g3Ip'",
-                sourceDip,
+                "uci set firewall.${rule.section}.src_ip='$g3Ip'", sourceDip,
                 "uci set firewall.${rule.section}.src_dport=${rule.externalPort}",
                 "uci set firewall.${rule.section}.dest=lan",
                 "uci set firewall.${rule.section}.dest_ip='$phoneIp'",
                 "uci set firewall.${rule.section}.dest_port=${rule.internalPort}",
                 "uci set firewall.${rule.section}.proto=${rule.protocol}",
-                "uci set firewall.${rule.section}.target=DNAT"
-            ).filter { it.isNotEmpty() }.joinToString("\\n")
-        }.joinToString("\\n")
+                "uci set firewall.${rule.section}.target=DNAT").filter { it.isNotEmpty() }.joinToString("\n")
+        }.joinToString("\n")
         val names = rules.joinToString(" ") { it.section }
-        return listOf(
-            "set -eu",
-            "backup='$backup'",
-            "[ ! -e \"\\$backup\" ] || { echo 'Session backup already exists' >&2; exit 31; }",
-            "for section in $names; do if uci -q get \"firewall.\\$section\" >/dev/null 2>&1; then echo \"Session rule exists: \\$section\" >&2; exit 32; fi; done",
-            "[ -z \"\\$(uci changes firewall)\" ] || { echo 'Firewall has pending changes' >&2; exit 33; }",
-            "cp /etc/config/firewall \"\\$backup\"",
-            "rollback() { status=\\$?; if [ \"\\$status\" -ne 0 ]; then cp \"\\$backup\" /etc/config/firewall; uci revert firewall || true; /etc/init.d/firewall reload || true; rm -f \"\\$backup\"; fi; exit \"\\$status\"; }",
-            "trap rollback EXIT HUP INT TERM",
-            sections,
-            "uci commit firewall",
-            "/etc/init.d/firewall reload",
-            "trap - EXIT HUP INT TERM",
-            "echo 'G3 migration session $id installed'"
-        ).joinToString("\\n") + "\\n"
+        return listOf("set -eu", "backup='$backup'",
+            "[ ! -e \"${sh}backup\" ] || { echo 'Session backup already exists' >&2; exit 31; }",
+            "for section in $names; do if uci -q get \"firewall.${sh}section\" >/dev/null 2>&1; then echo \"Session rule exists: ${sh}section\" >&2; exit 32; fi; done",
+            "[ -z \"${sh}(uci changes firewall)\" ] || { echo 'Firewall has pending changes' >&2; exit 33; }",
+            "cp /etc/config/firewall \"${sh}backup\"",
+            "rollback() { status=${sh}?; if [ \"${sh}status\" -ne 0 ]; then cp \"${sh}backup\" /etc/config/firewall; uci revert firewall || true; /etc/init.d/firewall reload || true; rm -f \"${sh}backup\"; fi; exit \"${sh}status\"; }",
+            "trap rollback EXIT HUP INT TERM", sections, "uci commit firewall", "/etc/init.d/firewall reload",
+            "trap - EXIT HUP INT TERM", "echo 'G3 migration session $id installed'").joinToString("\n") + "\n"
     }
 
     /** Cleanup verifies the owner marker before deleting any section. */
     fun cleanupScript(): String {
+        val sh = '$'
         val names = rules.joinToString(" ") { it.section }
         val backup = "/root/g3-migration-$id.firewall.bak"
-        return listOf(
-            "set -eu",
-            "backup='$backup'",
-            "[ -f \"\\$backup\" ] || { echo 'Session backup missing' >&2; exit 41; }",
-            "[ -z \"\\$(uci changes firewall)\" ] || { echo 'Firewall has pending changes' >&2; exit 42; }",
-            "for section in $names; do owner=\\$(uci -q get \"firewall.\\$section.g3mig_owner\" || true); if [ -n \"\\$owner\" ] && [ \"\\$owner\" != '$id' ]; then echo \"Foreign owner: \\$section\" >&2; exit 43; fi; done",
-            "cp /etc/config/firewall \"\\$backup.cleanup\"",
-            "cleanup_rollback() { status=\\$?; if [ \"\\$status\" -ne 0 ]; then cp \"\\$backup.cleanup\" /etc/config/firewall; uci revert firewall || true; /etc/init.d/firewall reload || true; fi; rm -f \"\\$backup.cleanup\"; exit \"\\$status\"; }",
+        return listOf("set -eu", "backup='$backup'",
+            "[ -f \"${sh}backup\" ] || { echo 'Session backup missing' >&2; exit 41; }",
+            "[ -z \"${sh}(uci changes firewall)\" ] || { echo 'Firewall has pending changes' >&2; exit 42; }",
+            "for section in $names; do owner=${sh}(uci -q get \"firewall.${sh}section.g3mig_owner\" || true); if [ -n \"${sh}owner\" ] && [ \"${sh}owner\" != '$id' ]; then echo \"Foreign owner: ${sh}section\" >&2; exit 43; fi; done",
+            "cp /etc/config/firewall \"${sh}backup.cleanup\"",
+            "cleanup_rollback() { status=${sh}?; if [ \"${sh}status\" -ne 0 ]; then cp \"${sh}backup.cleanup\" /etc/config/firewall; uci revert firewall || true; /etc/init.d/firewall reload || true; fi; rm -f \"${sh}backup.cleanup\"; exit \"${sh}status\"; }",
             "trap cleanup_rollback EXIT HUP INT TERM",
-            "for section in $names; do owner=\\$(uci -q get \"firewall.\\$section.g3mig_owner\" || true); if [ \"\\$owner\" = '$id' ]; then uci -q delete \"firewall.\\$section\"; fi; done",
-            "uci commit firewall",
-            "/etc/init.d/firewall reload",
-            "rm -f \"\\$backup\" \"\\$backup.cleanup\"",
-            "trap - EXIT HUP INT TERM",
-            "echo 'G3 migration session $id cleaned'"
-        ).joinToString("\\n") + "\\n"
+            "for section in $names; do owner=${sh}(uci -q get \"firewall.${sh}section.g3mig_owner\" || true); if [ \"${sh}owner\" = '$id' ]; then uci -q delete \"firewall.${sh}section\"; fi; done",
+            "uci commit firewall", "/etc/init.d/firewall reload", "rm -f \"${sh}backup\" \"${sh}backup.cleanup\"",
+            "trap - EXIT HUP INT TERM", "echo 'G3 migration session $id cleaned'").joinToString("\n") + "\n"
     }
     companion object {
         fun create(router: String, phone: String, g3: String) =
