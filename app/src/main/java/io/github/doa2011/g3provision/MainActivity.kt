@@ -32,6 +32,7 @@ class MainActivity : Activity() {
     private val blufiTimeoutRunnable = Runnable {
         if (blufiVersionRequested && !blufiVersionReceived) {
             blufiVersionRequested = false
+            pendingProvision=false
             note("BLUFi 版本应答超时：5 秒内未收到 0x41。没有发送 Wi-Fi 配置；请确认 G3 处于配网模式后点击“重试 BLUFi 握手”。")
         }
     }
@@ -50,6 +51,7 @@ class MainActivity : Activity() {
     private var tx: BluetoothGattCharacteristic? = null
     private var seq = 0
     private var chunks = emptyList<G3BlufiProtocol.Chunk>()
+    private var chunkIndex=0
     private lateinit var selector: Spinner
     private lateinit var bleAddress: EditText
     private lateinit var ssid: EditText
@@ -69,9 +71,9 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,12,20,12) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
-        bleAddress = field("BLE MAC（可选；默认已知 G3 地址）", "D0:EF:76:25:5D:CE")
+        bleAddress = field("BLE MAC（可选，支持直接连接）")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（已知设备默认值，可修改）", "D0EF76255DCC"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        host = field("虚拟服务 IPv4（建议自动检测的路由器地址）", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
         layout.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
         layout.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
         layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
@@ -89,7 +91,7 @@ class MainActivity : Activity() {
         root.addView(ScrollView(this).apply { addView(output) },
             LinearLayout.LayoutParams(-1,(180*resources.displayMetrics.density).toInt()))
         setContentView(root)
-        note("G3 设备：SENSOR3_255DCC；BLE MAC D0:EF:76:25:5D:CE；Wi-Fi STA MAC D0EF76255DCC。")
+        note("扫描所有 BLE 广播；BLE MAC、Wi-Fi STA MAC 和虚拟网关 MAC 分别确认。")
         note("完整流程：先启动手机 HTTPS/MQTT，再 BLE 配网；BLUFi 应答后发送配置，入网后由 MQTT 服务应答五项网关请求。")
         try {
             val bundled=G3FirmwareValidator.loadBundled(this)
@@ -158,11 +160,11 @@ class MainActivity : Activity() {
             note("读取 BLE 地址失败：缺少 BLUETOOTH_SCAN 权限")
             return
         }
-        val name=result.scanRecord?.deviceName
+        val name=result.scanRecord?.deviceName?.takeIf { it.isNotBlank() }
             ?: try { result.device.name } catch(_:SecurityException) { null }
         val display=name?.takeIf { it.isNotBlank() } ?: "未命名设备"
         scanCount++
-        val isTarget = address.equals("D0:EF:76:25:5D:CE",true) || display.startsWith("SENSOR3_",true)
+        val isTarget = address.equals(bleAddress.text.toString().trim(),true) || display.startsWith("SENSOR3_",true)
         if(isTarget) {
             targetSeen=true
             handler.removeCallbacks(targetScanFallbackRunnable)
@@ -171,7 +173,9 @@ class MainActivity : Activity() {
                 note("发现 G3 广播：$display，BLE=$address，RSSI=\${result.rssi}")
             }
         }
-        if(devices.put(address,result.device)==null) {
+        val newDevice=devices.put(address,result.device)==null
+        val nameImproved=display!="未命名设备" && deviceLabels[address]?.startsWith("未命名设备 (")==true
+        if(newDevice || nameImproved) {
             deviceLabels[address]="$display ($address, RSSI \${result.rssi})"
             runOnUiThread { refreshDevices() }
             if(scanCount==1) note("已收到 BLE 广播，正在列出设备。")
@@ -206,7 +210,7 @@ class MainActivity : Activity() {
         note("扫描结束：收到 $scanCount 条广播，发现 \${devices.size} 台设备")
         if(!targetSeen) {
             if(scanCount==0) note("本轮没有收到任何 BLE 广播。请确认蓝牙/定位授权、系统定位开关及 G3 已短按后盖网络键进入配网状态。")
-            else note("收到了其他 BLE 设备，但未发现 G3 SENSOR3_255DCC（D0:EF:76:25:5D:CE）。已尝试全设备扫描及目标 MAC 过滤扫描。")
+            else note("收到了 BLE 广播；未识别 SENSOR3 名称。仍可选择无名称设备或输入 MAC 直接连接。")
         }
     }
     private fun scan() {
@@ -241,7 +245,7 @@ class MainActivity : Activity() {
             // First pass deliberately scans all advertisements; a target-MAC pass follows if needed.
             scanning=true
             bleScanner.startScan(null,settings,scanner)
-            note("BLE 全设备扫描已启动：目标 SENSOR3_255DCC / D0:EF:76:25:5D:CE，持续 30 秒。")
+            note("BLE 全设备扫描已启动，持续 30 秒；无名称设备也会显示。")
             handler.removeCallbacks(stopScanRunnable)
             handler.removeCallbacks(targetScanFallbackRunnable)
             handler.postDelayed(targetScanFallbackRunnable,10000)
@@ -259,13 +263,15 @@ class MainActivity : Activity() {
     }
     private fun startTargetScanFallback() {
         if(!scanning || targetSeen || targetScanFallbackStarted) return
+        if(!BluetoothAdapter.checkBluetoothAddress(bleAddress.text.toString().trim().uppercase())) return
         val bleScanner=try { manager.adapter.bluetoothLeScanner } catch(_:Exception) { null } ?: return
         try {
             bleScanner.stopScan(scanner)
-            val filter=ScanFilter.Builder().setDeviceAddress("D0:EF:76:25:5D:CE").build()
+            val address=bleAddress.text.toString().trim().uppercase()
+            val filter=ScanFilter.Builder().setDeviceAddress(address).build()
             bleScanner.startScan(listOf(filter),activeScanSettings,scanner)
             targetScanFallbackStarted=true
-            note("前 10 秒未发现 G3，已切换为目标 BLE MAC 精确扫描：D0:EF:76:25:5D:CE。")
+            note("前 10 秒未发现 G3，已切换为用户指定 BLE MAC 精确扫描：$address。")
         } catch(e:Exception) {
             note("G3 目标 MAC 二次扫描启动失败：" + e.javaClass.simpleName + ": " + e.message)
         }
@@ -292,6 +298,13 @@ class MainActivity : Activity() {
         tx = null
         seq = 0
         chunks = emptyList()
+        chunkIndex=0
+        pendingProvision=false
+        provisioningSending=false
+        writeInFlight=false
+        blufiVersionRequested=false
+        blufiVersionReceived=false
+        handler.removeCallbacks(blufiTimeoutRunnable)
         gatt?.close()
         note("尝试 GATT 连接 " + device.address)
         try { gatt = device.connectGatt(this, false, callbacks, BluetoothDevice.TRANSPORT_LE) }
@@ -314,23 +327,62 @@ class MainActivity : Activity() {
                 @Suppress("DEPRECATION") g.writeDescriptor(d) }
         }
         override fun onDescriptorWrite(g:BluetoothGatt,d:BluetoothGattDescriptor,status:Int) {
-            if(status==0) {note("Notify 已开启");send(0x1c)} else note("Notify 失败")
+            if(status==0) {note("Notify 已开启");handler.post { requestBlufiVersion() }} else note("Notify 失败")
         }
-        override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic,value:ByteArray) {receive(value)}
+        override fun onCharacteristicWrite(g:BluetoothGatt,c:BluetoothGattCharacteristic,status:Int) {
+            handler.post {
+                if(g!==gatt) return@post
+                writeInFlight=false
+                if(status!=0) {
+                    provisioningSending=false; pendingProvision=false; blufiVersionRequested=false
+                    handler.removeCallbacks(blufiTimeoutRunnable)
+                    note("BLE 写入失败 status=$status；停止发送，请重新连接")
+                } else if(provisioningSending) sendChunks()
+            }
+        }
+        override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic,value:ByteArray) {if(g===gatt) receive(value)}
         @Suppress("DEPRECATION") override fun onCharacteristicChanged(g:BluetoothGatt,c:BluetoothGattCharacteristic) {receive(c.value?:byteArrayOf())}
     }
     private fun receive(data:ByteArray) {
         note("通知 "+data.joinToString(" ") { "%02X".format(it.toInt() and 255) })
-        if(data.isNotEmpty()&&data[0]==0x41.toByte()&&chunks.isNotEmpty()) {note("版本响应收到");sendChunks()}
+        val version=G3BlufiProtocol.parseVersionNotification(data) ?: return
+        handler.post {
+            if (!blufiVersionRequested) return@post
+            handler.removeCallbacks(blufiTimeoutRunnable)
+            blufiVersionRequested=false
+            blufiVersionReceived=true
+            note("BLUFi 版本响应：${version.major}.${version.minor}")
+            if(pendingProvision) {
+                pendingProvision=false
+                provisioningSending=true
+                if(!writeInFlight) sendChunks()
+            }
+        }
     }
-    private fun send(type:Int,payload:ByteArray=byteArrayOf(),control:Int=0) {
-        val c=tx ?: return note("未连接");val g=gatt ?: return
-        val frame=byteArrayOf(type.toByte(),control.toByte(),(seq++).toByte(),payload.size.toByte())+payload
-        if(Build.VERSION.SDK_INT>=33) g.writeCharacteristic(c,frame,BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-        else { @Suppress("DEPRECATION") c.value=frame
-            @Suppress("DEPRECATION") g.writeCharacteristic(c) }
+    private fun requestBlufiVersion(retry:Boolean=false) {
+        if(tx==null || gatt==null) return note("未连接")
+        if(provisioningSending || writeInFlight) return note("BLE 写入进行中")
+        if(blufiVersionRequested && !retry) return
+        blufiVersionRequested=true
+        blufiVersionReceived=false
+        handler.removeCallbacks(blufiTimeoutRunnable)
+        if(send(0x1c)) handler.postDelayed(blufiTimeoutRunnable,5000)
+        else blufiVersionRequested=false
     }
-
+    private fun send(type:Int,payload:ByteArray=byteArrayOf(),control:Int=0):Boolean {
+        val c=tx ?: return false
+        val g=gatt ?: return false
+        if(writeInFlight) return false
+        val frame=G3BlufiProtocol.frame(type,control,seq and 255,payload)
+        val accepted=try {
+            if(Build.VERSION.SDK_INT>=33) g.writeCharacteristic(c,frame,BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)==0
+            else { @Suppress("DEPRECATION") c.value=frame
+                @Suppress("DEPRECATION") g.writeCharacteristic(c) }
+        } catch(e:Exception) { note("BLE 写入异常："+e.message); false }
+        if(accepted) { seq=(seq+1) and 255; writeInFlight=true }
+        else note("BLE 写入未被接受")
+        return accepted
+    }
 
     @Suppress("DEPRECATION")
     private fun currentGatewayIpv4(): String {
@@ -452,29 +504,28 @@ class MainActivity : Activity() {
 
     private fun provision() {
         try {
-            require(tx!=null) {"未连接"}
-            val s=ssid.text.toString().toByteArray();val p=password.text.toString().toByteArray()
-            val ip=host.text.toString();val octets=ip.split('.')
-            require(octets.size==4&&octets.all {it.toIntOrNull() in 0..255}) {"IPv4 无效"}
-            val hex=mac.text.toString().replace(":","")
-            require(hex.matches(Regex("[0-9a-fA-F]{12}"))) {"MAC 无效"}
-            val m=hex.chunked(2).map {it.toInt(16).toByte()}.toByteArray()
-            require((m[0].toInt() and 1)==0&&m.any {it.toInt()!=0}) {"MAC 需为非零单播"}
-            require(s.isNotEmpty()&&s.size<=32&&p.size<=64) {"Wi-Fi 长度无效"}
-            val addr=ip.toByteArray()
-            val body=byteArrayOf(0x42,1,0,0,s.size.toByte())+s+byteArrayOf(p.size.toByte())+p+
-                byteArrayOf(addr.size.toByte())+addr+byteArrayOf(6)+m+byteArrayOf(3)
-            val list=mutableListOf<ByteArray>();var rest=body
-            while(rest.size>16) {list.add(byteArrayOf(rest.size.toByte(),(rest.size shr 8).toByte())+
-                rest.take(14).toByteArray());rest=rest.drop(14).toByteArray()}
-            list.add(rest);chunks=list;chunkIndex=0
-            note("准备发送 "+chunks.size+" 个分片");send(0x1c)
+            require(tx!=null && gatt!=null) {"未连接"}
+            require(!provisioningSending && !pendingProvision && !writeInFlight) {"BLE 写入进行中"}
+            val body=G3BlufiProtocol.buildWifiConfig(ssid.text.toString(),password.text.toString(),host.text.toString().trim(),mac.text.toString())
+            chunks=G3BlufiProtocol.fragment(body)
+            chunkIndex=0
+            note("准备发送 "+chunks.size+" 个分片")
+            pendingProvision=true
+            requestBlufiVersion(retry=true)
+            if(!blufiVersionRequested) pendingProvision=false
         } catch(e:Exception) {note("错误 "+e.message)}
     }
     private fun sendChunks() {
-        if(chunkIndex>=chunks.size) {chunks=emptyList();note("BLE 配网数据已发送；尚不代表设备已入网。请在路由器 DHCP 列表核对 Wi-Fi STA MAC，再检查手机迁移服务日志。");return}
-        val i=chunkIndex++;send(0x4d,chunks[i],if(i<chunks.lastIndex)0x10 else 0)
-        handler.postDelayed({sendChunks()},600)
+        if(!provisioningSending || writeInFlight) return
+        if(chunkIndex>=chunks.size) {
+            chunks=emptyList()
+            provisioningSending=false
+            note("BLE 配网分片写入完成；尚不代表设备已入网。请核对 DHCP 与迁移服务日志。")
+            return
+        }
+        val chunk=chunks[chunkIndex]
+        if(send(0x4d,chunk.payload,chunk.control)) chunkIndex++
+        else provisioningSending=false
     }
     override fun onDestroy() { handler.removeCallbacks(stopScanRunnable); stopScanning(); super.onDestroy();gatt?.close()}
 }
