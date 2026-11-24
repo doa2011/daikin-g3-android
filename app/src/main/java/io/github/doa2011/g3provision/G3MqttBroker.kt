@@ -25,7 +25,8 @@ class G3MqttBroker(
     private val sslContext: SSLContext,
     private val port: Int = MigrationPorts.MQTT_TLS,
     private val weatherCode: Int = 1,
-    private val onAckState: (Set<String>) -> Unit = {}
+    private val onAckState: (Set<String>) -> Unit = {},
+    private val onDiagnostic: (String) -> Unit = {}
 ) {
     @Volatile private var running = false
     @Volatile private var otaCommandSent = false
@@ -35,6 +36,8 @@ class G3MqttBroker(
     private val clients = ConcurrentHashMap.newKeySet<Client>()
     private val packetIds = AtomicInteger(1)
     private val acknowledged = ConcurrentHashMap.newKeySet<String>()
+
+    private fun diag(message: String) { try { onDiagnostic(message.take(240)) } catch (_: Exception) {} }
 
     fun start() {
         if (running) return
@@ -49,6 +52,7 @@ class G3MqttBroker(
                     socket.soTimeout = 120000
                     val client = Client(socket)
                     clients.add(client)
+                    diag("TLS client accepted remote=${socket.inetAddress.hostAddress}")
                     workers.execute { client.run() }
                 } catch (_: Exception) {
                     if (running) { /* accept loop remains available for the next connection */ }
@@ -131,6 +135,7 @@ class G3MqttBroker(
                 writePacket(0x20, byteArrayOf(0, 1)); close(); return
             }
             clientId = c.readUtf8()
+            diag("MQTT CONNECT clientId=$clientId protocol=$protocol level=$level")
             // Remaining will/user/password fields are intentionally ignored; upstream broker permits anonymous.
             writePacket(0x20, byteArrayOf(0, 0))
         }
@@ -144,6 +149,7 @@ class G3MqttBroker(
                 val qos = c.readByte()
                 if (topic.isNotBlank() && qos in 0..1) {
                     subscriptions.add(topic)
+                    diag("MQTT SUBSCRIBE clientId=$clientId topic=$topic qos=$qos")
                     granted.add(qos.toByte())
                 } else granted.add(0x80.toByte())
             }
@@ -166,7 +172,8 @@ class G3MqttBroker(
             val packetId = if (qos == 1) c.readUnsignedShort() else 0
             val payload = c.readBytes(c.remaining())
             if (qos == 1) writePacket(0x40, byteArrayOf((packetId ushr 8).toByte(), packetId.toByte()))
-            val responseTopic = responseTopic(topic) ?: return
+            diag("MQTT PUBLISH clientId=$clientId topic=$topic bytes=${payload.size}")
+            val responseTopic = responseTopic(topic) ?: run { diag("MQTT IGNORE unmatched request topic=$topic"); return }
             if (payload.size > 8192) return
             val raw = String(payload, StandardCharsets.UTF_8)
             delayed.schedule({ acknowledge(topic, responseTopic, raw) }, 1500, TimeUnit.MILLISECONDS)
@@ -210,11 +217,11 @@ class G3MqttBroker(
         try {
             val request = JSONObject(raw)
             val token = request.optString("client_token")
-            if (token.isBlank() || token.length > 128) return
+            if (token.isBlank() || token.length > 128) { diag("MQTT REJECT invalid client_token topic=$requestTopic"); return }
             val data = request.optJSONObject("data") ?: JSONObject()
             if (requestTopic.endsWith("upload_snapshot")) {
-                if (data.optJSONObject("physics")?.optString("mac") != mac) return
-            } else if (data.optString("terminal_mac", gatewayMac) != gatewayMac) return
+                if (data.optJSONObject("physics")?.optString("mac") != mac) { diag("MQTT REJECT snapshot STA MAC mismatch expected=$mac"); return }
+            } else if (data.optString("terminal_mac", gatewayMac) != gatewayMac) { diag("MQTT REJECT gateway MAC mismatch expected=$gatewayMac topic=$requestTopic"); return }
 
             val responseData = when {
                 requestTopic.endsWith("/get_weather") -> JSONObject()
@@ -229,11 +236,12 @@ class G3MqttBroker(
             val recipients = clients.filter { it.accepts(responseTopic) }
             if (recipients.isNotEmpty()) {
                 recipients.forEach { it.sendPublish(responseTopic, response) }
+                diag("MQTT ACK sent request=$requestTopic response=$responseTopic subscribers=${recipients.size}")
                 acknowledged.add(responseTopic)
                 onAckState(acknowledgedTopics())
-            }
-        } catch (_: Exception) {
-            // Ignore malformed or unrelated factory messages.
+            } else { diag("MQTT ACK BLOCKED: device has not subscribed response=$responseTopic") }
+        } catch (e: Exception) {
+            diag("MQTT ACK ERROR request=$requestTopic error=${e.javaClass.simpleName}:${e.message}")
         }
     }
 
