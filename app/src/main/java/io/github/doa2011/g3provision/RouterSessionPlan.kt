@@ -81,6 +81,56 @@ internal class RouterSessionPlan(val id: String, val routerIp: String, val phone
             "uci commit firewall", "/etc/init.d/firewall reload", "rm -f \"${sh}backup\" \"${sh}backup.cleanup\"",
             "trap - EXIT HUP INT TERM", "echo 'G3 migration session $id cleaned'").joinToString("\n") + "\n"
     }
+    /**
+     * Installs a boot-persistent, session-owned watchdog. It retries cleanup every minute
+     * if UCI/firewall restoration fails; it never removes its backup on failure.
+     */
+    fun watchdogInstallScript(ttlSeconds: Int): String {
+        require(ttlSeconds in 60..86400) { "看门狗期限必须在 60 秒至 24 小时之间" }
+        val service = "/etc/init.d/g3mig_$id"
+        val cleanup = "/root/g3-migration-$id.cleanup.sh"
+        val pid = "/var/run/g3mig-$id.pid"
+        val heredoc = "G3MIG_$id"
+        val cleanupBody = cleanupScript().trimEnd()
+        val serviceBody = listOf(
+            "#!/bin/sh /etc/rc.common",
+            "START=99",
+            "STOP=01",
+            "USE_PROCD=0",
+            "start() {",
+            "  [ -f '$cleanup' ] || return 1",
+            "  if [ -f '$pid' ] && kill -0 "$(cat '$pid')" 2>/dev/null; then return 0; fi",
+            "  ( sleep $ttlSeconds; while :; do",
+            "      if /bin/sh '$cleanup'; then",
+            "        rm -f '$pid' '$cleanup' '$service' '/etc/rc.d/S99g3mig_$id' '/etc/rc.d/K01g3mig_$id'",
+            "        exit 0",
+            "      fi",
+            "      sleep 60",
+            "    done ) >/dev/null 2>&1 &",
+            "  echo $! > '$pid'",
+            "}",
+            "stop() {",
+            "  if [ -f '$pid' ]; then kill "$(cat '$pid')" 2>/dev/null || true; rm -f '$pid'; fi",
+            "}"
+        ).joinToString("\n")
+        return listOf(
+            "set -eu",
+            "[ -f '/root/g3-migration-$id.firewall.bak' ] || { echo 'Session backup missing; watchdog not installed' >&2; exit 51; }",
+            "[ ! -e '$service' ] || { echo 'Session watchdog already exists' >&2; exit 52; }",
+            "umask 077",
+            "cat > '$cleanup' <<'$heredoc'",
+            cleanupBody,
+            heredoc,
+            "cat > '$service' <<'$heredoc'",
+            serviceBody,
+            heredoc,
+            "chmod 700 '$cleanup' '$service'",
+            "ln -s '$service' '/etc/rc.d/S99g3mig_$id'",
+            "'$service' start",
+            "echo 'G3 migration watchdog installed for session $id; TTL=$ttlSeconds seconds'"
+        ).joinToString("\n") + "\n"
+    }
+
     companion object {
         fun create(router: String, phone: String, g3: String) =
             RouterSessionPlan(UUID.randomUUID().toString().replace("-", ""), router, phone, g3)
