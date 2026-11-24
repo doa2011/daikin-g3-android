@@ -17,6 +17,7 @@ android {
     packaging { resources { excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF" } }
 }
 dependencies {
+    implementation("com.github.mwiede:jsch:0.2.21")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
