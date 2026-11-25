@@ -124,10 +124,12 @@ class MainActivity : Activity() {
         note("正在连接 OpenWrt，预安装本次迁移的禁用规则模板；此时不需要 G3 IP/MAC。")
         Thread {
             try {
+                MigrationDiagnostics.append(this, "SSH operation=prepare START")
                 val result = RouterBootstrap.prepare(router,user,secret,phone)
+                MigrationDiagnostics.append(this, "SSH operation=prepare OK")
                 routerSessionId = result.sessionId
-                note("OpenWrt 会话准备成功。四条规则已创建但保持 disabled，不会影响现有设备流量。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥已自动接受并记录，无需手工核验。")
-            } catch (e: Exception) { note("OpenWrt 会话准备失败：" + (e.message ?: e.javaClass.simpleName)) }
+                note("OpenWrt 会话准备成功。四条规则已创建但保持 disabled，不会影响现有设备流量。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
+            } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}"); note("OpenWrt 会话准备失败：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
 
@@ -140,10 +142,12 @@ class MainActivity : Activity() {
         note("正在删除本次会话的临时规则……")
         Thread {
             try {
+                MigrationDiagnostics.append(this, "SSH operation=cleanup START")
                 val result = RouterBootstrap.cleanup(router,user,secret,id)
+                MigrationDiagnostics.append(this, "SSH operation=cleanup OK")
                 routerSessionId = null
                 note("本次 OpenWrt 会话规则已清理。\n" + result.output)
-            } catch (e: Exception) { note("清理失败，保留会话 ID 供重试：" + (e.message ?: e.javaClass.simpleName)) }
+            } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=cleanup ERROR type=${e.javaClass.simpleName}"); note("清理失败，保留会话 ID 供重试：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
 
@@ -156,7 +160,9 @@ class MainActivity : Activity() {
         note("正在读取 OpenWrt DHCP 租约……")
         Thread {
             try {
+                MigrationDiagnostics.append(this, "SSH operation=leases START")
                 val result = RouterBootstrap.readDhcpLeases(router,user,secret)
+                MigrationDiagnostics.append(this, "SSH operation=leases OK")
                 val rows = result.output.lineSequence().mapNotNull { line ->
                     val p = line.trim().split(Regex("\\s+"))
                     if (p.size >= 4 && p[1].matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) && p[2].matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}"))) Triple(p[1],p[2],p[3]) else null
@@ -171,13 +177,15 @@ class MainActivity : Activity() {
                             g3Ip.setText(selected.second)
                             Thread {
                                 try {
-                                    val bound = RouterBootstrap.bind(router,user,secret,id,selected.second)
+                                    MigrationDiagnostics.append(this, "SSH operation=bind START")
+                val bound = RouterBootstrap.bind(router,user,secret,id,selected.second)
+                MigrationDiagnostics.append(this, "SSH operation=bind OK")
                                     note("已将 G3 DHCP 身份绑定到本次会话：MAC=" + selected.first + "，IP=" + selected.second + "\n" + bound.output)
-                                } catch (e: Exception) { note("绑定 G3 DHCP 地址失败：" + (e.message ?: e.javaClass.simpleName)) }
+                                } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=bind ERROR type=${e.javaClass.simpleName}"); note("绑定 G3 DHCP 地址失败：" + (e.message ?: e.javaClass.simpleName)) }
                             }.start()
                         }.setNegativeButton("取消",null).show()
                 }
-            } catch (e: Exception) { note("读取 DHCP 租约失败：" + (e.message ?: e.javaClass.simpleName)) }
+            } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=leases ERROR type=${e.javaClass.simpleName}"); note("读取 DHCP 租约失败：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
     private fun requiredBlePermissions(): Array<String> =
@@ -541,7 +549,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 8, 16, 8)
         }
-        val categories = listOf("全部", "TCP/TLS", "CONNECT", "SUBSCRIBE", "PUBLISH/RX/TX", "异常/拒绝")
+        val categories = listOf("全部", "TCP/TLS", "CONNECT", "SUBSCRIBE", "PUBLISH/RX/TX", "异常/拒绝", "DNS", "HTTPS", "SSH")
         val category = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, categories)
         }
@@ -570,6 +578,9 @@ class MainActivity : Activity() {
                 3 -> listOf("SUBSCRIBE")
                 4 -> listOf("PUBLISH", " RX", " TX")
                 5 -> listOf("fail", "error", "reject", "exception", "失败", "拒绝")
+                6 -> listOf("DNS ")
+                7 -> listOf("HTTPS ")
+                8 -> listOf("SSH ")
                 else -> emptyList()
             }
             val lines = snapshot.lineSequence().filter { it.isNotBlank() }.filter { line ->
@@ -595,20 +606,20 @@ class MainActivity : Activity() {
             val intent = android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT)
                 .addCategory(android.content.Intent.CATEGORY_OPENABLE)
                 .setType("text/plain")
-                .putExtra(android.content.Intent.EXTRA_TITLE, "g3-mqtt-diagnostics.txt")
+                .putExtra(android.content.Intent.EXTRA_TITLE, "g3-network-diagnostics.txt")
             startActivityForResult(intent, 302)
         }
         action("清空") {
-            android.app.AlertDialog.Builder(this).setMessage("清空历史 MQTT 日志？不会重置网关应答状态。")
+            android.app.AlertDialog.Builder(this).setMessage("清空历史网络诊断日志？不会重置网关应答状态。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("清空") { _, _ ->
-                    prefs.edit().remove("mqtt_diag").apply()
+                    MigrationDiagnostics.clear(this@MainActivity)
                     snapshot = ""
                     render()
                 }.show()
         }
         val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("MQTT 实时诊断")
+            .setTitle("网络与 MQTT 实时诊断")
             .setView(panel).setPositiveButton("关闭", null).create()
         val refresh = object : Runnable {
             override fun run() {
