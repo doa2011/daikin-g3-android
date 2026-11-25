@@ -25,6 +25,7 @@ android {
 dependencies {
     implementation("com.github.mwiede:jsch:0.2.21")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("org.msgpack:msgpack-core:0.9.8")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
     testImplementation("junit:junit:4.13.2")
