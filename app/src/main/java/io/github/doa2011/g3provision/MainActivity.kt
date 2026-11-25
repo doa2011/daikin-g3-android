@@ -68,6 +68,9 @@ class MainActivity : Activity() {
     private var firmwareFile: java.io.File? = null
     private var firmwareSha256: String? = null
     private lateinit var output: TextView
+    private lateinit var networkLog: TextView
+    private lateinit var accessLog: TextView
+    private lateinit var migrationLog: TextView
     private lateinit var connectionStatus: TextView
     private lateinit var routerStatus: TextView
     private lateinit var gatewayAckPanel: LinearLayout
@@ -121,6 +124,8 @@ class MainActivity : Activity() {
                 setTextColor(0xffb26a00.toInt()); setPadding(0,16,0,8)
             }
             page.addView(routerStatus)
+            networkLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"配网操作状态\\n\" }
+            page.addView(networkLog)
             action(page,"保存并准备路由器转发") {
                 phoneIp.setText(currentWifiIpv4())
                 installRouterSession()
@@ -136,6 +141,8 @@ class MainActivity : Activity() {
                 setBackgroundColor(0xffffebee.toInt())
             }
             page.addView(connectionStatus)
+            accessLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"接入操作状态\\n\" }
+            page.addView(accessLog)
             page.addView(selector)
             action(page,"扫描并连接 G3") { scan() }
             action(page,"发送配网参数") { provision() }
@@ -153,6 +160,8 @@ class MainActivity : Activity() {
             })
             gatewayAckPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
             page.addView(gatewayAckPanel)
+            migrationLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"迁移操作状态\\n\" }
+            page.addView(migrationLog)
         }
         run {
             val page=createPage("diagnostics","诊断","总体操作日志与 MQTT 链路诊断。")
@@ -208,16 +217,21 @@ class MainActivity : Activity() {
         if (routerSessionId != null) { note("已有活动会话；请先清理或检查路由器状态。"); return }
         if (router.isBlank() || user.isBlank() || secret.isBlank()) { note("安装前只需要填写 OpenWrt 路由器 IP、SSH 用户名和密码。"); return }
         if (phone.isBlank()) { note("无法自动获取手机 Wi-Fi IPv4，请连接 OpenWrt Wi-Fi 后重试。"); return }
-        note("正在连接 OpenWrt，预安装本次迁移的禁用规则模板；此时不需要 G3 IP/MAC。")
+        note("配网：正在连接 OpenWrt，准备本次迁移的路由器转发规则；手机地址=$phone。")
+        runOnUiThread { routerStatus.text=\"● 正在连接路由器并配置转发…\"; routerStatus.setTextColor(0xffb26a00.toInt()) }
         Thread {
             try {
                 MigrationDiagnostics.append(this, "SSH operation=prepare START")
                 val result = RouterBootstrap.prepare(router,user,secret,phone)
                 MigrationDiagnostics.append(this, "SSH operation=prepare OK")
                 routerSessionId = result.sessionId
-                runOnUiThread { routerStatus.text="● 路由器规则模板已准备；待配网后识别 G3 DHCP 身份并启用转发"; routerStatus.setTextColor(0xffb26a00.toInt()) }
+                runOnUiThread { routerStatus.text="● 路由器规则已准备；请继续接入 G3"; routerStatus.setTextColor(0xff137333.toInt()) }
                 note("OpenWrt 会话准备成功。四条 G3 专用规则已创建但保持 disabled；识别并绑定 G3 DHCP 身份后才会启用，不影响其他设备。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
-            } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}"); note("OpenWrt 会话准备失败：" + (e.message ?: e.javaClass.simpleName)) }
+            } catch (e: Exception) {
+                MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}")
+                runOnUiThread { routerStatus.text=\"● 转发配置失败\"; routerStatus.setTextColor(0xffb3261e.toInt()) }
+                note("配网：OpenWrt 转发配置失败：" + (e.message ?: e.javaClass.simpleName))
+            }
         }.start()
     }
 
@@ -752,9 +766,11 @@ class MainActivity : Activity() {
     private fun showAccessAdvanced() {
         val panel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,8,20,8) }
         panel.addView(TextView(this).apply { text="G3 蓝牙 MAC（可手动查看或修改）" })
+        (bleAddress.parent as? android.view.ViewGroup)?.removeView(bleAddress)
         panel.addView(bleAddress)
         panel.addView(Button(this).apply { text="按此 MAC 直连 G3"; setOnClickListener { connectAddress() } })
         panel.addView(TextView(this).apply { text="虚拟网关 MAC（单发身份帧）"; setPadding(0,12,0,0) })
+        (mac.parent as? android.view.ViewGroup)?.removeView(mac)
         panel.addView(mac)
         panel.addView(Button(this).apply { text="单独发送网关 MAC"; setOnClickListener { provision(gatewayOnly=true) } })
         android.app.AlertDialog.Builder(this).setTitle("接入高级设置").setView(panel).setPositiveButton("完成",null).show()
