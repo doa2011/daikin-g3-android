@@ -166,6 +166,7 @@ class MainActivity : Activity() {
         }
         run {
             val page=createPage("migration","迁移","发送 ESP32 / MCU 固件，并观察网关应答状态。")
+            action(page,"启动手机本地迁移服务（DNS / HTTPS / MQTT TLS）") { startLocalHttps() }
             action(page,"发送 OTA（ESP32 固件）") { triggerOta() }
             action(page,"发送 MCU 固件") { showMcuUpgradeStatus() }
             action(page,"高级") { showMigrationAdvanced() }
