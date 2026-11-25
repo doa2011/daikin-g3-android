@@ -71,83 +71,83 @@ DHCPBACK="/root/g3-migration-$id.dhcp.bak"
 [ -z "$(uci changes firewall)" ] || { echo 'Firewall has pending UCI changes' >&2; exit 62; }
 [ -z "$(uci changes dhcp)" ] || { echo 'DHCP/DNS has pending UCI changes' >&2; exit 62; }
 uci -q get dhcp.@dnsmasq[0] >/dev/null || { echo 'dnsmasq UCI section missing' >&2; exit 67; }
-for section in "$HTTPS" "$MQTT"; do
-  if uci -q get "firewall.$section" >/dev/null 2>&1; then echo "Session rule already exists: $section" >&2; exit 63; fi
+for section in "${'$'}HTTPS" "${'$'}MQTT"; do
+  if uci -q get "firewall.${'$'}section" >/dev/null 2>&1; then echo "Session rule already exists: ${'$'}section" >&2; exit 63; fi
 done
-[ ! -e "$SESSION" ] || { echo 'Session file already exists' >&2; exit 63; }
+[ ! -e "${'$'}SESSION" ] || { echo 'Session file already exists' >&2; exit 63; }
 umask 077
-cp /etc/config/firewall "$FWBACK"
-cp /etc/config/dhcp "$DHCPBACK"
+cp /etc/config/firewall "${'$'}FWBACK"
+cp /etc/config/dhcp "${'$'}DHCPBACK"
 rollback() {
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    cp "$FWBACK" /etc/config/firewall 2>/dev/null || true
-    cp "$DHCPBACK" /etc/config/dhcp 2>/dev/null || true
+  rc=${'$'}?
+  if [ "${'$'}rc" -ne 0 ]; then
+    cp "${'$'}FWBACK" /etc/config/firewall 2>/dev/null || true
+    cp "${'$'}DHCPBACK" /etc/config/dhcp 2>/dev/null || true
     uci revert firewall >/dev/null 2>&1 || true
     uci revert dhcp >/dev/null 2>&1 || true
     /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
     /etc/init.d/firewall reload >/dev/null 2>&1 || true
-    rm -f "$SESSION" "$FWBACK" "$DHCPBACK"
-    echo "ROLLBACK session=$ID exit=$rc" >&2
+    rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK"
+    echo "ROLLBACK session=${'$'}ID exit=${'$'}rc" >&2
   fi
 }
 trap rollback EXIT HUP INT TERM
 
 # Only the three Daikin DNS zones are forwarded to the phone resolver.
-uci add_list dhcp.@dnsmasq[0].server="/newlifemulti.daikin-china.com.cn/$PHONE#1053"
-uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053"
-uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053"
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti.daikin-china.com.cn/${'$'}PHONE#1053"
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh.daikin-china.com.cn/${'$'}PHONE#1053"
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh-core.daikin-china.com.cn/${'$'}PHONE#1053"
 
-uci set firewall.$HTTPS=redirect
-uci set firewall.$HTTPS.name='G3 migration Daikin HTTPS'
-uci set firewall.$HTTPS.g3mig_owner="$ID"
-uci set firewall.$HTTPS.src=lan
-uci set firewall.$HTTPS.src_dip="$ROUTER"
-uci set firewall.$HTTPS.src_dport=443
-uci set firewall.$HTTPS.dest=lan
-uci set firewall.$HTTPS.dest_ip="$PHONE"
-uci set firewall.$HTTPS.dest_port=8443
-uci set firewall.$HTTPS.proto=tcp
-uci set firewall.$HTTPS.target=DNAT
-uci set firewall.$HTTPS.enabled=1
+uci set firewall.${'$'}HTTPS=redirect
+uci set firewall.${'$'}HTTPS.name='G3 migration Daikin HTTPS'
+uci set firewall.${'$'}HTTPS.g3mig_owner="${'$'}ID"
+uci set firewall.${'$'}HTTPS.src=lan
+uci set firewall.${'$'}HTTPS.src_dip="${'$'}ROUTER"
+uci set firewall.${'$'}HTTPS.src_dport=443
+uci set firewall.${'$'}HTTPS.dest=lan
+uci set firewall.${'$'}HTTPS.dest_ip="${'$'}PHONE"
+uci set firewall.${'$'}HTTPS.dest_port=8443
+uci set firewall.${'$'}HTTPS.proto=tcp
+uci set firewall.${'$'}HTTPS.target=DNAT
+uci set firewall.${'$'}HTTPS.enabled=1
 
-uci set firewall.$MQTT=redirect
-uci set firewall.$MQTT.name='G3 migration Daikin MQTT TLS'
-uci set firewall.$MQTT.g3mig_owner="$ID"
-uci set firewall.$MQTT.src=lan
-uci set firewall.$MQTT.src_dip="$ROUTER"
-uci set firewall.$MQTT.src_dport=8883
-uci set firewall.$MQTT.dest=lan
-uci set firewall.$MQTT.dest_ip="$PHONE"
-uci set firewall.$MQTT.dest_port=18883
-uci set firewall.$MQTT.proto=tcp
-uci set firewall.$MQTT.target=DNAT
-uci set firewall.$MQTT.enabled=1
+uci set firewall.${'$'}MQTT=redirect
+uci set firewall.${'$'}MQTT.name='G3 migration Daikin MQTT TLS'
+uci set firewall.${'$'}MQTT.g3mig_owner="${'$'}ID"
+uci set firewall.${'$'}MQTT.src=lan
+uci set firewall.${'$'}MQTT.src_dip="${'$'}ROUTER"
+uci set firewall.${'$'}MQTT.src_dport=8883
+uci set firewall.${'$'}MQTT.dest=lan
+uci set firewall.${'$'}MQTT.dest_ip="${'$'}PHONE"
+uci set firewall.${'$'}MQTT.dest_port=18883
+uci set firewall.${'$'}MQTT.proto=tcp
+uci set firewall.${'$'}MQTT.target=DNAT
+uci set firewall.${'$'}MQTT.enabled=1
 uci commit dhcp
 uci commit firewall
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall reload
 for domain in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
-  entry="/$domain/$PHONE#1053"
-  uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry" || { echo "Missing dnsmasq entry: $entry" >&2; exit 68; }
+  entry="/${'$'}domain/${'$'}PHONE#1053"
+  uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}entry" || { echo "Missing dnsmasq entry: ${'$'}entry" >&2; exit 68; }
 done
 if command -v fw4 >/dev/null 2>&1; then
-  nft -a list ruleset > "/tmp/g3-migration-$ID.nft"
-  grep -Fq 'G3 migration Daikin HTTPS' "/tmp/g3-migration-$ID.nft" || { echo 'fw4 HTTPS runtime rule missing' >&2; exit 69; }
-  grep -Fq 'G3 migration Daikin MQTT TLS' "/tmp/g3-migration-$ID.nft" || { echo 'fw4 MQTT runtime rule missing' >&2; exit 69; }
+  nft -a list ruleset > "/tmp/g3-migration-${'$'}ID.nft"
+  grep -Fq 'G3 migration Daikin HTTPS' "/tmp/g3-migration-${'$'}ID.nft" || { echo 'fw4 HTTPS runtime rule missing' >&2; exit 69; }
+  grep -Fq 'G3 migration Daikin MQTT TLS' "/tmp/g3-migration-${'$'}ID.nft" || { echo 'fw4 MQTT runtime rule missing' >&2; exit 69; }
   BACKEND=fw4
 elif command -v fw3 >/dev/null 2>&1; then
-  iptables-save -t nat > "/tmp/g3-migration-$ID.iptables"
-  grep -Fq 'G3 migration Daikin HTTPS' "/tmp/g3-migration-$ID.iptables" || { echo 'fw3 HTTPS runtime rule missing' >&2; exit 69; }
-  grep -Fq 'G3 migration Daikin MQTT TLS' "/tmp/g3-migration-$ID.iptables" || { echo 'fw3 MQTT runtime rule missing' >&2; exit 69; }
+  iptables-save -t nat > "/tmp/g3-migration-${'$'}ID.iptables"
+  grep -Fq 'G3 migration Daikin HTTPS' "/tmp/g3-migration-${'$'}ID.iptables" || { echo 'fw3 HTTPS runtime rule missing' >&2; exit 69; }
+  grep -Fq 'G3 migration Daikin MQTT TLS' "/tmp/g3-migration-${'$'}ID.iptables" || { echo 'fw3 MQTT runtime rule missing' >&2; exit 69; }
   BACKEND=fw3
 else echo 'Neither fw4 nor fw3 runtime backend found' >&2; exit 70; fi
-printf 'id=%s\nrouter=%s\nphone=%s\nbackend=%s\n' "$ID" "$ROUTER" "$PHONE" "$BACKEND" > "$SESSION"
+printf 'id=%s\nrouter=%s\nphone=%s\nbackend=%s\n' "${'$'}ID" "${'$'}ROUTER" "${'$'}PHONE" "${'$'}BACKEND" > "${'$'}SESSION"
 trap - EXIT HUP INT TERM
-echo "ACTIVE session=$ID backend=$BACKEND scope=three-daikin-domains"
-echo "DNS: three Daikin domains -> $PHONE:1053; other domains unchanged"
-echo "HTTPS: $ROUTER:443 -> $PHONE:8443"
-echo "MQTT TLS: $ROUTER:8883 -> $PHONE:18883"
+echo "ACTIVE session=${'$'}ID backend=${'$'}BACKEND scope=three-daikin-domains"
+echo "DNS: three Daikin domains -> ${'$'}PHONE:1053; other domains unchanged"
+echo "HTTPS: ${'$'}ROUTER:443 -> ${'$'}PHONE:8443"
+echo "MQTT TLS: ${'$'}ROUTER:8883 -> ${'$'}PHONE:18883"
 """.trimIndent() + "\n"
         val executed = run(routerIp,user,password,script)
         return Result(executed.first,id,executed.second)
@@ -163,46 +163,46 @@ FWBACK="/root/g3-migration-$sessionId.firewall.bak"
 DHCPBACK="/root/g3-migration-$sessionId.dhcp.bak"
 [ -z "$(uci changes firewall)" ] || { echo 'Firewall has pending UCI changes' >&2; exit 66; }
 [ -z "$(uci changes dhcp)" ] || { echo 'DHCP/DNS has pending UCI changes' >&2; exit 66; }
-[ -f "$SESSION" ] || { echo 'Router session record missing; refusing unscoped cleanup' >&2; exit 71; }
-grep -Fqx "id=$ID" "$SESSION" || { echo 'Session ID mismatch' >&2; exit 72; }
+[ -f "${'$'}SESSION" ] || { echo 'Router session record missing; refusing unscoped cleanup' >&2; exit 71; }
+grep -Fqx "id=${'$'}ID" "${'$'}SESSION" || { echo 'Session ID mismatch' >&2; exit 72; }
 rollback() {
- rc=$?
- if [ "$rc" -ne 0 ]; then
-  [ ! -f "$FWBACK" ] || cp "$FWBACK" /etc/config/firewall
-  [ ! -f "$DHCPBACK" ] || cp "$DHCPBACK" /etc/config/dhcp
+ rc=${'$'}?
+ if [ "${'$'}rc" -ne 0 ]; then
+  [ ! -f "${'$'}FWBACK" ] || cp "${'$'}FWBACK" /etc/config/firewall
+  [ ! -f "${'$'}DHCPBACK" ] || cp "${'$'}DHCPBACK" /etc/config/dhcp
   uci revert firewall >/dev/null 2>&1 || true
   uci revert dhcp >/dev/null 2>&1 || true
   /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
   /etc/init.d/firewall reload >/dev/null 2>&1 || true
-  echo "CLEANUP_ROLLBACK session=$ID exit=$rc" >&2
+  echo "CLEANUP_ROLLBACK session=${'$'}ID exit=${'$'}rc" >&2
  fi
 }
 trap rollback EXIT HUP INT TERM
 for suffix in https mqtt; do
- section="g3mig_${ID}_$suffix"
- owner="$(uci -q get firewall.$section.g3mig_owner || true)"
- if [ -n "$owner" ]; then [ "$owner" = "$ID" ] || { echo "Foreign rule: $section" >&2; exit 73; }; uci -q delete firewall.$section; fi
+ section="g3mig_${'$'}{ID}_${'$'}suffix"
+ owner="$(uci -q get firewall.${'$'}section.g3mig_owner || true)"
+ if [ -n "${'$'}owner" ]; then [ "${'$'}owner" = "${'$'}ID" ] || { echo "Foreign rule: ${'$'}section" >&2; exit 73; }; uci -q delete firewall.${'$'}section; fi
 done
-PHONE="$(sed -n 's/^phone=//p' "$SESSION")"
-[ -n "$PHONE" ] || { echo 'Phone address missing from session record' >&2; exit 74; }
-entry="/newlifemulti.daikin-china.com.cn/$PHONE#1053"
-if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
-entry="/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053"
-if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
-entry="/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053"
-if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
+PHONE="$(sed -n 's/^phone=//p' "${'$'}SESSION")"
+[ -n "${'$'}PHONE" ] || { echo 'Phone address missing from session record' >&2; exit 74; }
+entry="/newlifemulti.daikin-china.com.cn/${'$'}PHONE#1053"
+if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}entry"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}entry"; fi
+entry="/newlifemulti-cdh.daikin-china.com.cn/${'$'}PHONE#1053"
+if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}entry"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}entry"; fi
+entry="/newlifemulti-cdh-core.daikin-china.com.cn/${'$'}PHONE#1053"
+if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}entry"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}entry"; fi
 uci commit dhcp
 uci commit firewall
 /etc/init.d/dnsmasq restart
 /etc/init.d/firewall reload
 for domain in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
- entry="/$domain/$PHONE#1053"
- if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then echo "DNS entry remains: $entry" >&2; exit 75; fi
+ entry="/${'$'}domain/${'$'}PHONE#1053"
+ if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}entry"; then echo "DNS entry remains: ${'$'}entry" >&2; exit 75; fi
 done
-for suffix in https mqtt; do section="g3mig_${ID}_$suffix"; if uci -q get firewall.$section >/dev/null 2>&1; then echo "Firewall section remains: $section" >&2; exit 76; fi; done
-rm -f "$SESSION" "$FWBACK" "$DHCPBACK" "/tmp/g3-migration-$ID.nft" "/tmp/g3-migration-$ID.iptables"
+for suffix in https mqtt; do section="g3mig_${'$'}{ID}_${'$'}suffix"; if uci -q get firewall.${'$'}section >/dev/null 2>&1; then echo "Firewall section remains: ${'$'}section" >&2; exit 76; fi; done
+rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK" "/tmp/g3-migration-${'$'}ID.nft" "/tmp/g3-migration-${'$'}ID.iptables"
 trap - EXIT HUP INT TERM
-echo "CLEANED session=$ID; exact split-DNS and firewall entries removed"
+echo "CLEANED session=${'$'}ID; exact split-DNS and firewall entries removed"
 """.trimIndent() + "\n"
         val executed = run(routerIp,user,password,script)
         return Result(executed.first,sessionId,executed.second)
