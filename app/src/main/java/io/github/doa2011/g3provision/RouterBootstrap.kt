@@ -147,7 +147,7 @@ trap - EXIT HUP INT TERM
 echo "ACTIVE session=$ID backend=$BACKEND scope=three-daikin-domains"
 echo "DNS: three Daikin domains -> $PHONE:1053; other domains unchanged"
 echo "HTTPS: $ROUTER:443 -> $PHONE:8443"
-echo "MQTT TLS: $ROUTER:8888 -> $PHONE:18888"
+echo "MQTT TLS: $ROUTER:8883 -> $PHONE:18883"
 """.trimIndent() + "\n"
         val executed = run(routerIp,user,password,script)
         return Result(executed.first,id,executed.second)
