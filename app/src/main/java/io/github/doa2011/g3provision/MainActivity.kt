@@ -68,96 +68,127 @@ class MainActivity : Activity() {
     private var firmwareFile: java.io.File? = null
     private var firmwareSha256: String? = null
     private lateinit var output: TextView
+    private lateinit var connectionStatus: TextView
+    private lateinit var routerStatus: TextView
+    private lateinit var gatewayAckPanel: LinearLayout
     private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val pages = linkedMapOf<String, ScrollView>()
-        val navigation = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-        val navScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled=false
-            addView(navigation)
-        }
         val content = android.widget.FrameLayout(this)
         fun createPage(key: String, title: String, subtitle: String): LinearLayout {
             val page = LinearLayout(this).apply {
                 orientation=LinearLayout.VERTICAL
                 setPadding(20,12,20,12)
                 addView(TextView(this@MainActivity).apply {
-                    text=title
-                    textSize=22f
+                    text=title; textSize=22f
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
                 })
                 addView(TextView(this@MainActivity).apply { text=subtitle; setPadding(0,8,0,16) })
             }
-            val scroll = ScrollView(this).apply { isFillViewport=true; addView(page) }
+            val scroll=ScrollView(this).apply { isFillViewport=true; addView(page) }
             pages[key]=scroll
-            content.addView(scroll, android.widget.FrameLayout.LayoutParams(-1,-1))
+            content.addView(scroll,android.widget.FrameLayout.LayoutParams(-1,-1))
             return page
         }
-        fun field(page: LinearLayout, h: String, initial: String = ""): EditText = EditText(this).apply {
-            hint=h; setText(initial); page.addView(this)
+        fun field(page: LinearLayout, hintText: String, initial: String = ""): EditText =
+            EditText(this).apply { hint=hintText; setText(initial); page.addView(this) }
+        fun action(page: LinearLayout, label: String, onClick: () -> Unit) {
+            page.addView(Button(this).apply { text=label; setOnClickListener { onClick() } })
+        }
+        host=EditText(this).apply { hint="OpenWrt 路由器地址"; setText(currentGatewayIpv4()) }
+        sshUser=EditText(this).apply { hint="路由器用户名"; setText("root") }
+        sshPassword=EditText(this).apply { hint="路由器密码"; inputType=129 }
+        phoneIp=EditText(this).apply { setText(currentWifiIpv4()) }
+        ssid=EditText(this)
+        password=EditText(this).apply { inputType=129 }
+        bleAddress=EditText(this)
+        deviceStaMac=EditText(this)
+        g3Ip=EditText(this)
+        mac=EditText(this).apply { setText("020000000001") }
+        firmwareVersion=EditText(this).apply { setText(G3FirmwareValidator.BUNDLED_OTA_VERSION) }
+        selector=Spinner(this)
+        run {
+            val page=createPage("network","配网","填写路由器与 G3 无线接入点信息；保存后准备本次设备专用转发。")
+            page.addView(TextView(this).apply { text="路由器"; textSize=17f; setTypeface(typeface,android.graphics.Typeface.BOLD) })
+            page.addView(host); page.addView(sshUser); page.addView(sshPassword)
+            page.addView(TextView(this).apply { text="接入点信息"; textSize=17f; setPadding(0,18,0,4); setTypeface(typeface,android.graphics.Typeface.BOLD) })
+            field(page,"接入点 SSID").also { ssid=it }
+            field(page,"接入点密码").also { password=it; it.inputType=129 }
+            routerStatus=TextView(this).apply {
+                text="● 路由器转发尚未开启"
+                setTextColor(0xffb26a00.toInt()); setPadding(0,16,0,8)
+            }
+            page.addView(routerStatus)
+            action(page,"保存并准备路由器转发") {
+                phoneIp.setText(currentWifiIpv4())
+                installRouterSession()
+            }
+            action(page,"清理本次路由器转发") { removeRouterSession() }
         }
         run {
-            val page=createPage("network","01 网络环境","先准备路由器规则；配网后确认 G3 DHCP 身份。")
-            host=field(page,"OpenWrt 路由器 IPv4",currentGatewayIpv4())
-            sshUser=field(page,"OpenWrt SSH 用户名","root")
-            sshPassword=field(page,"OpenWrt SSH 密码").apply { inputType=129 }
-            phoneIp=field(page,"手机 Wi-Fi IPv4（路由器端口转发目标）",currentWifiIpv4())
-            deviceStaMac=field(page,"G3 Wi-Fi STA MAC（从路由器 DHCP 获取）")
-            g3Ip=field(page,"G3 当前 DHCP IPv4（确认后填写）")
-        page.addView(Button(this).apply { text="OpenWrt：安装 G3 专用临时转发规则（SSH）"; setOnClickListener { installRouterSession() } })
-        page.addView(Button(this).apply { text="OpenWrt：删除本次临时转发规则"; setOnClickListener { removeRouterSession() } })
-        page.addView(Button(this).apply { text="④ 配网后读取 DHCP 租约并绑定 G3"; setOnClickListener { discoverAndBindG3() } })
+            val page=createPage("access","接入","连接 G3 后发送接入点参数；不要求先完成其他标签操作。")
+            connectionStatus=TextView(this).apply {
+                text="● 尚未连接 G3"
+                setTextColor(0xffb3261e.toInt())
+                setPadding(12,12,12,12)
+                setBackgroundColor(0xffffebee.toInt())
+            }
+            page.addView(connectionStatus)
+            page.addView(selector)
+            action(page,"扫描并连接 G3") { scan() }
+            action(page,"发送配网参数") { provision() }
+            action(page,"高级") { showAccessAdvanced() }
         }
         run {
-            val page=createPage("ble","02 蓝牙配网","启动网关服务后扫描、连接并发送 Wi-Fi 配置。")
-            selector=Spinner(this); page.addView(selector)
-            bleAddress=field(page,"BLE MAC（可选，支持直接连接）")
-            ssid=field(page,"2.4GHz Wi-Fi SSID")
-            password=field(page,"Wi-Fi 密码").apply { inputType=129 }
-        page.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
-        page.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
-        page.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
-        page.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
-        page.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
-        page.addView(Button(this).apply { text="仅补发虚拟网关 MAC（已配网，短按网络键后连接）"; setOnClickListener { provision(gatewayOnly=true) } })
+            val page=createPage("migration","迁移","发送 ESP32 / MCU 固件，并观察网关应答状态。")
+            action(page,"发送 OTA（ESP32 固件）") { triggerOta() }
+            action(page,"发送 MCU 固件") { showMcuUpgradeStatus() }
+            action(page,"高级") { showMigrationAdvanced() }
+            page.addView(TextView(this).apply {
+                text="五项网关应答检测"; textSize=18f
+                setTypeface(typeface,android.graphics.Typeface.BOLD)
+                setPadding(0,20,0,8)
+            })
+            gatewayAckPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+            page.addView(gatewayAckPanel)
         }
         run {
-            val page=createPage("gateway","03 虚拟网关","配网前启动服务；观察五项网关请求与应答。")
-            mac=field(page,"虚拟网关 MAC","020000000001")
-        page.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
-        page.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
+            val page=createPage("diagnostics","诊断","总体操作日志与 MQTT 链路诊断。")
+            action(page,"打开 MQTT 链路诊断") { showMqttDiagnostics() }
+            output=TextView(this).apply { textSize=12f; setPadding(4,12,4,12) }
+            page.addView(output)
         }
-        run {
-            val page=createPage("firmware","04 固件迁移","仅在满足现有安全检查后触发 OTA。")
-            firmwareVersion=field(page,"OTA 目标标签（内置 RC7：V99.00.00）",G3FirmwareValidator.BUNDLED_OTA_VERSION)
-        page.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
-        page.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
-        }
-        run {
-            val page=createPage("diagnostics","05 实时诊断","查看网络与 MQTT 日志；下方保留操作反馈。")
-        page.addView(Button(this).apply { text="查看网络与 MQTT 实时诊断"; setOnClickListener { showMqttDiagnostics() } })
+        val navigation=LinearLayout(this).apply {
+            orientation=LinearLayout.HORIZONTAL
+            setPadding(4,4,4,4)
+            setBackgroundColor(0xfff1f4f8.toInt())
         }
         val navButtons=linkedMapOf<String,Button>()
-        fun selectPage(key: String) {
-            pages.forEach { (id, view) -> view.visibility=if(id==key) android.view.View.VISIBLE else android.view.View.GONE }
-            navButtons.forEach { (id, button) -> button.isEnabled=id!=key }
+        fun selectPage(key:String) {
+            pages.forEach { (id,view) -> view.visibility=if(id==key) android.view.View.VISIBLE else android.view.View.GONE }
+            navButtons.forEach { (id,button) ->
+                button.isEnabled=id!=key
+                button.alpha=if(id==key) 1f else 0.72f
+            }
         }
-        listOf("network" to "网络","ble" to "蓝牙","gateway" to "网关","firmware" to "固件","diagnostics" to "诊断").forEach { (key,label) ->
-            val button=Button(this).apply { text=label; textSize=12f; minWidth=0; setOnClickListener { selectPage(key) } }
+        listOf("network" to "配网","access" to "接入","migration" to "迁移","diagnostics" to "诊断").forEach { (key,label) ->
+            val button=Button(this).apply {
+                text=label; textSize=14f; minWidth=0
+                setPadding(2,8,2,8)
+                setOnClickListener { selectPage(key) }
+            }
             navButtons[key]=button
-            navigation.addView(button,LinearLayout.LayoutParams(-2,-2))
+            navigation.addView(button,LinearLayout.LayoutParams(0,-2,1f))
         }
         selectPage("network")
-        root.addView(navScroll,LinearLayout.LayoutParams(-1,-2))
         root.addView(content,LinearLayout.LayoutParams(-1,0,1f))
-        output=TextView(this).apply { textSize=12f; setPadding(16,8,16,8) }
-        root.addView(ScrollView(this).apply { addView(output) },
-            LinearLayout.LayoutParams(-1,(180*resources.displayMetrics.density).toInt()))
+        root.addView(navigation,LinearLayout.LayoutParams(-1,-2))
         setContentView(root)
-        note("扫描所有 BLE 广播；BLE MAC、Wi-Fi STA MAC 和虚拟网关 MAC 分别确认。")
-        note("完整流程：先启动手机 HTTPS/MQTT，再 BLE 配网；BLUFi 应答后发送配置，入网后由 MQTT 服务应答五项网关请求。")
+        renderGatewayAcks()
+        note("四个标签可独立操作；缺少前置条件时会提示，但不会锁住其他标签。")
+        note("BLE MAC、Wi-Fi STA MAC 与虚拟网关 MAC 是不同身份，不能互相推算。")
         try {
             val bundled=G3FirmwareValidator.loadBundled(this)
             firmwareFile=bundled.first
@@ -184,7 +215,8 @@ class MainActivity : Activity() {
                 val result = RouterBootstrap.prepare(router,user,secret,phone)
                 MigrationDiagnostics.append(this, "SSH operation=prepare OK")
                 routerSessionId = result.sessionId
-                note("OpenWrt 会话准备成功。四条规则已创建但保持 disabled，不会影响现有设备流量。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
+                runOnUiThread { routerStatus.text="● 路由器规则模板已准备；待配网后识别 G3 DHCP 身份并启用转发"; routerStatus.setTextColor(0xffb26a00.toInt()) }
+                note("OpenWrt 会话准备成功。四条 G3 专用规则已创建但保持 disabled；识别并绑定 G3 DHCP 身份后才会启用，不影响其他设备。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
             } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}"); note("OpenWrt 会话准备失败：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
@@ -236,6 +268,7 @@ class MainActivity : Activity() {
                                     MigrationDiagnostics.append(this, "SSH operation=bind START")
                 val bound = RouterBootstrap.bind(router,user,secret,id,selected.second)
                 MigrationDiagnostics.append(this, "SSH operation=bind OK")
+                                    runOnUiThread { routerStatus.text="● G3 专用路由器转发已开启"; routerStatus.setTextColor(0xff137333.toInt()); routerStatus.setBackgroundColor(0xffe6f4ea.toInt()) }
                                     note("已将 G3 DHCP 身份绑定到本次会话：MAC=" + selected.first + "，IP=" + selected.second + "\n" + bound.output)
                                 } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=bind ERROR type=${e.javaClass.simpleName}"); note("绑定 G3 DHCP 地址失败：" + (e.message ?: e.javaClass.simpleName)) }
                             }.start()
@@ -447,14 +480,15 @@ class MainActivity : Activity() {
         blufiVersionReceived=false
         handler.removeCallbacks(blufiTimeoutRunnable)
         gatt?.close()
+        connectionStatus.text="● 正在连接 G3…"; connectionStatus.setTextColor(0xffb26a00.toInt()); connectionStatus.setBackgroundColor(0xfffff4e5.toInt())
         note("尝试 GATT 连接 " + device.address)
         try { gatt = device.connectGatt(this, false, callbacks, BluetoothDevice.TRANSPORT_LE) }
         catch (e: Exception) { note("GATT 异常: " + e.message) }
     }
     private val callbacks=object: BluetoothGattCallback() {
         override fun onConnectionStateChange(g:BluetoothGatt,status:Int,newState:Int) {
-            if(status==0&&newState==BluetoothProfile.STATE_CONNECTED) {note("已连接");g.discoverServices()}
-            else { handler.post { if(g===gatt) { note("BLE 断开 status=$status，已提交分片 $chunkIndex/${chunks.size}"); gatt=null; tx=null; provisioningSending=false; pendingProvision=false; writeInFlight=false; blufiVersionRequested=false; handler.removeCallbacks(blufiTimeoutRunnable); chunks=emptyList() }; g.close() } }
+            if(status==0&&newState==BluetoothProfile.STATE_CONNECTED) { handler.post { if(g===gatt) { connectionStatus.text="● G3 已连接"; connectionStatus.setTextColor(0xff137333.toInt()); connectionStatus.setBackgroundColor(0xffe6f4ea.toInt()); note("已连接"); g.discoverServices() } } }
+            else { handler.post { if(g===gatt) { connectionStatus.text="● G3 未连接"; connectionStatus.setTextColor(0xffb3261e.toInt()); connectionStatus.setBackgroundColor(0xffffebee.toInt()); note("BLE 断开 status=$status，已提交分片 $chunkIndex/${chunks.size}"); gatt=null; tx=null; provisioningSending=false; pendingProvision=false; writeInFlight=false; blufiVersionRequested=false; handler.removeCallbacks(blufiTimeoutRunnable); chunks=emptyList() }; g.close() } }
         }
         override fun onServicesDiscovered(g:BluetoothGatt,status:Int) {
             val s=g.getService(service) ?: return note("缺少 FFFF 服务")
@@ -694,12 +728,50 @@ class MainActivity : Activity() {
         refresh.run()
     }
 
+    private fun renderGatewayAcks() {
+        if (!::gatewayAckPanel.isInitialized) return
+        val acks=getSharedPreferences("g3",0).getStringSet("gateway_acks",emptySet()) ?: emptySet()
+        val expected=listOf("snapshot_upload","get_weather","login_ipbox","get_filter_sensor3","get_error_sensor3")
+        gatewayAckPanel.removeAllViews()
+        expected.forEach { name ->
+            val received=acks.any { it.endsWith(name) }
+            gatewayAckPanel.addView(TextView(this).apply {
+                text=(if(received) "● " else "● ")+name+(if(received) "  已收到应答" else "  尚未确认")
+                setTextColor(if(received) 0xff137333.toInt() else 0xffb3261e.toInt())
+                setPadding(4,7,4,7)
+            })
+        }
+        val count=expected.count { name -> acks.any { it.endsWith(name) } }
+        gatewayAckPanel.addView(TextView(this).apply { text="已确认 $count / 5 项"; setPadding(4,10,4,8) })
+    }
     private fun showGatewayAcks() {
-        val acks = getSharedPreferences("g3", 0).getStringSet("gateway_acks", emptySet()) ?: emptySet()
-        val expected = listOf("snapshot_upload", "get_weather", "login_ipbox", "get_filter_sensor3", "get_error_sensor3")
-        val lines = expected.map { name -> (if (acks.any { it.endsWith(name) }) "✓ " else "○ ") + name }
-        val ota = getSharedPreferences("g3", 0).getString("ota_state", "尚未触发") ?: "尚未触发"
-        note("网关应答进度 " + acks.size + "/5\n" + lines.joinToString("\n") + "\nOTA 状态：" + ota)
+        renderGatewayAcks()
+        val acks=getSharedPreferences("g3",0).getStringSet("gateway_acks",emptySet()) ?: emptySet()
+        note("网关应答进度 "+acks.size+"/5")
+    }
+    private fun showAccessAdvanced() {
+        val panel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,8,20,8) }
+        panel.addView(TextView(this).apply { text="G3 蓝牙 MAC（可手动查看或修改）" })
+        panel.addView(bleAddress)
+        panel.addView(Button(this).apply { text="按此 MAC 直连 G3"; setOnClickListener { connectAddress() } })
+        panel.addView(TextView(this).apply { text="虚拟网关 MAC（单发身份帧）"; setPadding(0,12,0,0) })
+        panel.addView(mac)
+        panel.addView(Button(this).apply { text="单独发送网关 MAC"; setOnClickListener { provision(gatewayOnly=true) } })
+        android.app.AlertDialog.Builder(this).setTitle("接入高级设置").setView(panel).setPositiveButton("完成",null).show()
+    }
+    private fun showMigrationAdvanced() {
+        val panel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,8,20,8) }
+        panel.addView(TextView(this).apply { text="G3 Wi-Fi STA MAC" }); panel.addView(deviceStaMac)
+        panel.addView(TextView(this).apply { text="G3 当前 IP 地址" }); panel.addView(g3Ip)
+        panel.addView(TextView(this).apply { text="ESP32 固件版本标签" }); panel.addView(firmwareVersion)
+        panel.addView(Button(this).apply { text="选择并校验 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })
+        android.app.AlertDialog.Builder(this).setTitle("迁移高级设置").setView(panel).setPositiveButton("完成",null).show()
+    }
+    private fun showMcuUpgradeStatus() {
+        android.app.AlertDialog.Builder(this).setTitle("屏幕 MCU 固件升级")
+            .setMessage("当前 APK 已有 MCU 只读探针状态机测试，但尚未接入经过上游源码核实的 MCU 写入/升级传输适配器。为避免向屏幕 MCU 发送未经确认的命令，本按钮暂不发送升级数据。待确认设备端已上传的镜像、版本探针及真实升级接口后再启用。")
+            .setPositiveButton("知道了",null).show()
+        note("MCU 升级请求：当前仅有探针协调器，无真实升级传输适配器；未发送任何 MCU 命令。")
     }
 
 
