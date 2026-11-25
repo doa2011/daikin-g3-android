@@ -73,10 +73,24 @@ object G3FirmwareValidator {
     }
 }
 
-class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext, private val firmware:G3FirmwareImage?=null, private val updateReady:()->Boolean={false}):NanoHTTPD("0.0.0.0",port) {
+class G3HttpsServer(port:Int, private val mac:String, private val origin:String, private val ca:ByteArray, ssl:SSLContext, private val firmware:G3FirmwareImage?=null, private val onDiagnostic:(String)->Unit={}, private val updateReady:()->Boolean={false}):NanoHTTPD("0.0.0.0",port) {
     private val token=java.util.UUID.randomUUID().toString().replace("-","")+java.util.UUID.randomUUID().toString().take(16)
     init { makeSecure(ssl.serverSocketFactory,null) }
-    override fun serve(s:IHTTPSession):Response = try {
+    override fun serve(s:IHTTPSession):Response {
+        val response = handleRequest(s)
+        val endpoint = when (s.uri) {
+            "/mqtt/root-ca.pem" -> "root-ca"
+            "/firmware/bry88-esp32-app.bin" -> "firmware"
+            "/ota/tenant/VRV/device/deviceLogin" -> "device-login"
+            "/jwt/getToken" -> "jwt-token"
+            "/gateway/getCaCertificateInfo" -> "ca-info"
+            "/ota/tenant/VRV/device/checkUpgrade-json" -> "check-upgrade"
+            else -> "unknown"
+        }
+        try { onDiagnostic("HTTPS endpoint=$endpoint status=${response.status.requestStatus}") } catch (_: Exception) {}
+        return response
+    }
+    private fun handleRequest(s:IHTTPSession):Response = try {
         when {
             s.method==Method.GET && s.uri=="/mqtt/root-ca.pem" -> binary(ca)
             s.method==Method.GET && s.uri=="/firmware/bry88-esp32-app.bin" && firmware!=null -> binary(firmware.bytes)
@@ -279,7 +293,7 @@ class G3MigrationService:Service() {
             val firmwarePath=i?.getStringExtra(EXTRA_FIRMWARE_PATH).orEmpty()
             val version=i?.getStringExtra(EXTRA_VERSION).orEmpty()
             firmware=if(firmwarePath.isNotBlank()) G3FirmwareValidator.load(File(firmwarePath),version,i?.getStringExtra(EXTRA_FIRMWARE_SHA256)) else null
-            server?.stop();server=G3HttpsServer(MigrationPorts.HTTPS,mac,origin,id.ca,id.ssl,firmware) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
+            server?.stop();server=G3HttpsServer(MigrationPorts.HTTPS,mac,origin,id.ca,id.ssl,firmware, onDiagnostic = { appendMqttDiagnostic(it) }) { broker?.allGatewayRepliesObserved()==true };server?.start(NanoHTTPD.SOCKET_READ_TIMEOUT,false)
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl, onAckState = { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() }, onDiagnostic = { line -> appendMqttDiagnostic(line) });broker?.start()
