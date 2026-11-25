@@ -14,7 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class DnsRedirectServer(
     private val upstreamIp: String,
     private val syntheticARecordIp: String,
-    private val port: Int = MigrationPorts.DNS
+    private val port: Int = MigrationPorts.DNS,
+    private val onDiagnostic: (String) -> Unit = {}
 ) {
     private val running = AtomicBoolean(false)
     private var udp: DatagramSocket? = null
@@ -90,8 +91,15 @@ class DnsRedirectServer(
         } finally { server.close() }
     }
 
+    private fun diag(message: String) { try { onDiagnostic(message) } catch (_: Exception) {} }
+
     internal fun answerOrForward(query: ByteArray, tcpMode: Boolean): ByteArray {
-        val q = parseQuestion(query) ?: throw IllegalArgumentException("Invalid DNS question")
+        val transport = if (tcpMode) "TCP" else "UDP"
+        val q = parseQuestion(query) ?: run {
+            diag("DNS ERROR transport=$transport invalid-question")
+            throw IllegalArgumentException("Invalid DNS question")
+        }
+        diag("DNS QUERY transport=$transport type=${q.type} target=${q.name in names}")
         if (q.name in names && (q.type == 1 || q.type == 28)) {
             val header = query.copyOfRange(0, 12)
             header[2] = ((header[2].toInt() or 0x80) and 0xff).toByte()
@@ -103,9 +111,15 @@ class DnsRedirectServer(
                 require(ip.size == 4) { "合成 DNS 地址必须是 IPv4" }
                 byteArrayOf(0xC0.toByte(), 0x0C, 0, 1, 0, 1, 0, 0, 0, 20, 0, 4) + ip
             } else byteArrayOf() // Suppress AAAA so the stock client cannot bypass the IPv4 migration endpoint.
+            diag("DNS ${if (q.type == 1) "REDIRECT" else "AAAA-SUPPRESS"} transport=$transport domain=${q.name}")
             return header + query.copyOfRange(12, q.end) + answer
         }
-        return forward(query, tcpMode)
+        return try {
+            forward(query, tcpMode).also { diag("DNS FORWARD transport=$transport bytes=${it.size}") }
+        } catch (e: Exception) {
+            diag("DNS ERROR transport=$transport type=${e.javaClass.simpleName}")
+            throw e
+        }
     }
 
     private data class Question(val name: String, val type: Int, val end: Int)

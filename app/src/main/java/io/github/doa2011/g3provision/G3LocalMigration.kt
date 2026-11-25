@@ -297,7 +297,7 @@ class G3MigrationService:Service() {
             val gateway=(i?.getStringExtra(EXTRA_GATEWAY)?:"020000000001").replace(":","").replace("-","").uppercase()
             require(Regex("[0-9A-F]{12}").matches(gateway)){"虚拟网关 MAC 无效"}
             broker?.stop();getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", emptySet()).apply();broker=G3MqttBroker(mac,gateway,id.ssl, onAckState = { topics -> getSharedPreferences("g3",0).edit().putStringSet("gateway_acks", HashSet(topics)).apply() }, onDiagnostic = { line -> appendMqttDiagnostic(line) });broker?.start()
-            dns=DnsRedirectServer(host,host).also { it.start() }
+            dns=DnsRedirectServer(host,host, onDiagnostic = { appendMqttDiagnostic(it) }).also { it.start() }
             getSharedPreferences("g3",0).edit().putString("service_state","DNS TCP/UDP ${MigrationPorts.DNS} + HTTPS ${MigrationPorts.HTTPS} + MQTT TLS ${MigrationPorts.MQTT_TLS} running").apply()
         } catch(e:Exception) {
             stopNetworkServices()
