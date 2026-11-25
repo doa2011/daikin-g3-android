@@ -135,7 +135,7 @@ class MainActivity : Activity() {
                 setTextColor(0xffb26a00.toInt()); setPadding(0,16,0,8)
             }
             page.addView(routerStatus)
-            networkLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"配网操作状态\\n\" }
+            networkLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text="配网操作状态\\n" }
             page.addView(networkLog)
             action(page,"保存并准备路由器转发") {
                 phoneIp.setText(currentWifiIpv4())
@@ -152,7 +152,7 @@ class MainActivity : Activity() {
                 setBackgroundColor(0xffffebee.toInt())
             }
             page.addView(connectionStatus)
-            accessLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"接入操作状态\\n\" }
+            accessLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text="接入操作状态\\n" }
             page.addView(accessLog)
             page.addView(selector)
             action(page,"扫描并连接 G3") { scan() }
@@ -171,7 +171,7 @@ class MainActivity : Activity() {
             })
             gatewayAckPanel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
             page.addView(gatewayAckPanel)
-            migrationLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text=\"迁移操作状态\\n\" }
+            migrationLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text="迁移操作状态\\n" }
             page.addView(migrationLog)
         }
         run {
@@ -229,7 +229,7 @@ class MainActivity : Activity() {
         if (router.isBlank() || user.isBlank() || secret.isBlank()) { note("安装前只需要填写 OpenWrt 路由器 IP、SSH 用户名和密码。"); return }
         if (phone.isBlank()) { note("无法自动获取手机 Wi-Fi IPv4，请连接 OpenWrt Wi-Fi 后重试。"); return }
         note("配网：正在连接 OpenWrt，准备本次迁移的路由器转发规则；手机地址=$phone。")
-        runOnUiThread { routerStatus.text=\"● 正在连接路由器并配置转发…\"; routerStatus.setTextColor(0xffb26a00.toInt()) }
+        runOnUiThread { routerStatus.text="● 正在连接路由器并配置转发…"; routerStatus.setTextColor(0xffb26a00.toInt()) }
         Thread {
             try {
                 MigrationDiagnostics.append(this, "SSH operation=prepare START")
@@ -240,7 +240,7 @@ class MainActivity : Activity() {
                 note("OpenWrt 会话准备成功。四条 G3 专用规则已创建但保持 disabled；识别并绑定 G3 DHCP 身份后才会启用，不影响其他设备。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
             } catch (e: Exception) {
                 MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}")
-                runOnUiThread { routerStatus.text=\"● 转发配置失败\"; routerStatus.setTextColor(0xffb3261e.toInt()) }
+                runOnUiThread { routerStatus.text="● 转发配置失败"; routerStatus.setTextColor(0xffb3261e.toInt()) }
                 note("配网：OpenWrt 转发配置失败：" + (e.message ?: e.javaClass.simpleName))
             }
         }.start()
