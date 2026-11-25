@@ -88,6 +88,7 @@ class MainActivity : Activity() {
     } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        routerSessionId = getSharedPreferences("g3_router", MODE_PRIVATE).getString("session_id", null)
         val root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
         val pages = linkedMapOf<String, ScrollView>()
         val content = android.widget.FrameLayout(this)
@@ -124,16 +125,20 @@ class MainActivity : Activity() {
         firmwareVersion=EditText(this).apply { setText(G3FirmwareValidator.BUNDLED_OTA_VERSION) }
         selector=Spinner(this)
         run {
-            val page=createPage("network","配网","填写路由器与 G3 无线接入点信息；保存后准备本次设备专用转发。")
+            val page=createPage("network","配网","大金域名定向 DNS：仅三个指定域名转发到手机；不需要识别 G3 DHCP 租约。")
             page.addView(TextView(this).apply { text="路由器"; textSize=17f; setTypeface(typeface,android.graphics.Typeface.BOLD) })
             page.addView(host); page.addView(sshUser); page.addView(sshPassword)
             page.addView(TextView(this).apply { text="接入点信息"; textSize=17f; setPadding(0,18,0,4); setTypeface(typeface,android.graphics.Typeface.BOLD) })
             field(page,"接入点 SSID").also { ssid=it }
             field(page,"接入点密码").also { password=it; it.inputType=129 }
             routerStatus=TextView(this).apply {
-                text="● 路由器转发尚未开启"
+                text=if (routerSessionId == null) "● 大金域名定向转发尚未开启" else "● 已有迁移会话，请核验或清理"
                 setTextColor(0xffb26a00.toInt()); setPadding(0,16,0,8)
             }
+            page.addView(TextView(this).apply {
+                text="仅劫持 newlifemulti.daikin-china.com.cn、newlifemulti-cdh.daikin-china.com.cn、newlifemulti-cdh-core.daikin-china.com.cn；其他域名保持原 DNS。三个域名解析到路由器虚拟 IP 后，TCP 443/8883 才转发到手机 8443/18883。无需 G3 IP、DHCP 租约或 STA MAC。"
+                textSize=12f; setPadding(0,8,0,8)
+            })
             page.addView(routerStatus)
             networkLog=TextView(this).apply { textSize=11f; setPadding(4,8,4,8); text="配网操作状态\\n" }
             page.addView(networkLog)
@@ -236,8 +241,9 @@ class MainActivity : Activity() {
                 val result = RouterBootstrap.prepare(router,user,secret,phone)
                 MigrationDiagnostics.append(this, "SSH operation=prepare OK")
                 routerSessionId = result.sessionId
-                runOnUiThread { routerStatus.text="● 路由器规则已准备；请继续接入 G3"; routerStatus.setTextColor(0xff137333.toInt()) }
-                note("OpenWrt 会话准备成功。四条 G3 专用规则已创建但保持 disabled；识别并绑定 G3 DHCP 身份后才会启用，不影响其他设备。\n会话 ID：" + result.sessionId + "\n" + result.output + "\nSSH 主机密钥采用首次信任，未进行独立核验。")
+                getSharedPreferences("g3_router", MODE_PRIVATE).edit().putString("session_id", result.sessionId).apply()
+                runOnUiThread { routerStatus.text="● 大金三个域名定向转发已开启（临时会话）"; routerStatus.setTextColor(0xff137333.toInt()) }
+                note("OpenWrt 定向 DNS 会话已启用。仅三个大金域名转发到手机 DNS 1053；普通域名不变。虚拟 IP 的 TCP 443/8883 分别转发到手机 8443/18883。无需 G3 DHCP 识别。\\n会话 ID：" + result.sessionId + "\\n" + result.output + "\\n注意：访问路由器虚拟 IP 的 443/8883 会进入本次迁移服务。")
             } catch (e: Exception) {
                 MigrationDiagnostics.append(this, "SSH operation=prepare ERROR type=${e.javaClass.simpleName}")
                 runOnUiThread { routerStatus.text="● 转发配置失败"; routerStatus.setTextColor(0xffb3261e.toInt()) }
@@ -259,49 +265,13 @@ class MainActivity : Activity() {
                 val result = RouterBootstrap.cleanup(router,user,secret,id)
                 MigrationDiagnostics.append(this, "SSH operation=cleanup OK")
                 routerSessionId = null
-                note("本次 OpenWrt 会话规则已清理。\n" + result.output)
+                getSharedPreferences("g3_router", MODE_PRIVATE).edit().remove("session_id").apply()
+                runOnUiThread { routerStatus.text="● 大金域名定向转发已清理"; routerStatus.setTextColor(0xffb26a00.toInt()) }
+                note("本次 OpenWrt 会话已由路由器核验清理。\\n" + result.output)
             } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=cleanup ERROR type=${e.javaClass.simpleName}"); note("清理失败，保留会话 ID 供重试：" + (e.message ?: e.javaClass.simpleName)) }
         }.start()
     }
 
-    private fun discoverAndBindG3() {
-        val id = routerSessionId
-        if (id.isNullOrBlank()) { note("请先安装 OpenWrt 临时规则模板。"); return }
-        val router = host.text.toString().trim()
-        val user = sshUser.text.toString().trim()
-        val secret = sshPassword.text.toString()
-        note("正在读取 OpenWrt DHCP 租约……")
-        Thread {
-            try {
-                MigrationDiagnostics.append(this, "SSH operation=leases START")
-                val result = RouterBootstrap.readDhcpLeases(router,user,secret)
-                MigrationDiagnostics.append(this, "SSH operation=leases OK")
-                val rows = result.output.lineSequence().mapNotNull { line ->
-                    val p = line.trim().split(Regex("\\s+"))
-                    if (p.size >= 4 && p[1].matches(Regex("(?i)([0-9a-f]{2}:){5}[0-9a-f]{2}")) && p[2].matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}"))) Triple(p[1],p[2],p[3]) else null
-                }.toList()
-                runOnUiThread {
-                    if (rows.isEmpty()) { note("尚未发现 DHCP 租约。请确认 G3 已完成 BLE 配网并连接 Wi-Fi，然后重试。"); return@runOnUiThread }
-                    val labels = rows.map { (mac,ip,name) -> "$name  ·  $ip  ·  $mac" }.toTypedArray()
-                    android.app.AlertDialog.Builder(this).setTitle("选择刚完成配网的 G3 DHCP 租约")
-                        .setItems(labels) { _, which ->
-                            val selected = rows[which]
-                            deviceStaMac.setText(selected.first)
-                            g3Ip.setText(selected.second)
-                            Thread {
-                                try {
-                                    MigrationDiagnostics.append(this, "SSH operation=bind START")
-                val bound = RouterBootstrap.bind(router,user,secret,id,selected.second)
-                MigrationDiagnostics.append(this, "SSH operation=bind OK")
-                                    runOnUiThread { routerStatus.text="● G3 专用路由器转发已开启"; routerStatus.setTextColor(0xff137333.toInt()); routerStatus.setBackgroundColor(0xffe6f4ea.toInt()) }
-                                    note("已将 G3 DHCP 身份绑定到本次会话：MAC=" + selected.first + "，IP=" + selected.second + "\n" + bound.output)
-                                } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=bind ERROR type=${e.javaClass.simpleName}"); note("绑定 G3 DHCP 地址失败：" + (e.message ?: e.javaClass.simpleName)) }
-                            }.start()
-                        }.setNegativeButton("取消",null).show()
-                }
-            } catch (e: Exception) { MigrationDiagnostics.append(this, "SSH operation=leases ERROR type=${e.javaClass.simpleName}"); note("读取 DHCP 租约失败：" + (e.message ?: e.javaClass.simpleName)) }
-        }.start()
-    }
     private fun requiredBlePermissions(): Array<String> =
         if(Build.VERSION.SDK_INT>=31) arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
