@@ -74,7 +74,18 @@ class MainActivity : Activity() {
     private lateinit var connectionStatus: TextView
     private lateinit var routerStatus: TextView
     private lateinit var gatewayAckPanel: LinearLayout
-    private fun note(s: String) { runOnUiThread { if (::output.isInitialized) output.append(s + "\n") } }
+    private fun note(s: String) { runOnUiThread {
+        val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        val line = "[$stamp] $s"
+        fun appendBounded(view: TextView) {
+            val lines = (view.text.toString().lineSequence() + sequenceOf(line)).toList().takeLast(160)
+            view.text = lines.joinToString("\n")
+        }
+        if (::output.isInitialized) appendBounded(output)
+        if (::networkLog.isInitialized) appendBounded(networkLog)
+        if (::accessLog.isInitialized) appendBounded(accessLog)
+        if (::migrationLog.isInitialized) appendBounded(migrationLog)
+    } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
@@ -777,9 +788,12 @@ class MainActivity : Activity() {
     }
     private fun showMigrationAdvanced() {
         val panel=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,8,20,8) }
-        panel.addView(TextView(this).apply { text="G3 Wi-Fi STA MAC" }); panel.addView(deviceStaMac)
-        panel.addView(TextView(this).apply { text="G3 当前 IP 地址" }); panel.addView(g3Ip)
-        panel.addView(TextView(this).apply { text="ESP32 固件版本标签" }); panel.addView(firmwareVersion)
+        panel.addView(TextView(this).apply { text="G3 Wi-Fi STA MAC" }); (deviceStaMac.parent as? android.view.ViewGroup)?.removeView(deviceStaMac)
+        panel.addView(deviceStaMac)
+        panel.addView(TextView(this).apply { text="G3 当前 IP 地址" }); (g3Ip.parent as? android.view.ViewGroup)?.removeView(g3Ip)
+        panel.addView(g3Ip)
+        panel.addView(TextView(this).apply { text="ESP32 固件版本标签" }); (firmwareVersion.parent as? android.view.ViewGroup)?.removeView(firmwareVersion)
+        panel.addView(firmwareVersion)
         panel.addView(Button(this).apply { text="选择并校验 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })
         android.app.AlertDialog.Builder(this).setTitle("迁移高级设置").setView(panel).setPositiveButton("完成",null).show()
     }
