@@ -75,6 +75,21 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,12,20,12) }
         fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
         selector = Spinner(this); layout.addView(selector)
+        val pageAnchors = linkedMapOf<String, TextView>()
+        fun section(key: String, title: String, subtitle: String) {
+            val heading = TextView(this).apply {
+                text = "$title\\n$subtitle"
+                textSize = 16f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(12, 22, 12, 10)
+                setTextColor(0xff245b83.toInt())
+            }
+            pageAnchors[key] = heading
+            layout.addView(heading)
+            layout.addView(android.view.View(this).apply {
+                setBackgroundColor(0xffd9e2ea.toInt())
+            }, LinearLayout.LayoutParams(-1, (1 * resources.displayMetrics.density).toInt()))
+        }
         bleAddress = field("BLE MAC（可选，支持直接连接）")
         ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
         host = field("OpenWrt 路由器 IPv4", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); g3Ip = field("G3 当前 DHCP IPv4（确认后填写）"); sshUser = field("OpenWrt SSH 用户名", "root"); sshPassword = field("OpenWrt SSH 密码").apply { inputType = 129 }; mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
@@ -100,21 +115,6 @@ class MainActivity : Activity() {
         val contentScroll = ScrollView(this).apply {
             isFillViewport=true
             addView(layout)
-        }
-        val pageAnchors = linkedMapOf<String, TextView>()
-        fun section(key: String, title: String, subtitle: String) {
-            val heading = TextView(this).apply {
-                text = "$title\\n$subtitle"
-                textSize = 16f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(12, 22, 12, 10)
-                setTextColor(0xff245b83.toInt())
-            }
-            pageAnchors[key] = heading
-            layout.addView(heading)
-            layout.addView(View(this).apply {
-                setBackgroundColor(0xffd9e2ea.toInt())
-            }, LinearLayout.LayoutParams(-1, (1 * resources.displayMetrics.density).toInt()))
         }
         val navigation = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
