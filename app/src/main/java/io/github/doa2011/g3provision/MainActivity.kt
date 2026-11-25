@@ -72,79 +72,86 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        val layout = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(20,12,20,12) }
-        fun field(h: String, initial: String = ""): EditText = EditText(this).apply { hint=h; setText(initial); layout.addView(this) }
-        selector = Spinner(this); layout.addView(selector)
-        val pageAnchors = linkedMapOf<String, TextView>()
-        fun section(key: String, title: String, subtitle: String) {
-            val heading = TextView(this).apply {
-                text = "$title\\n$subtitle"
-                textSize = 16f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(12, 22, 12, 10)
-                setTextColor(0xff245b83.toInt())
-            }
-            pageAnchors[key] = heading
-            layout.addView(heading)
-            layout.addView(android.view.View(this).apply {
-                setBackgroundColor(0xffd9e2ea.toInt())
-            }, LinearLayout.LayoutParams(-1, (1 * resources.displayMetrics.density).toInt()))
-        }
-        bleAddress = field("BLE MAC（可选，支持直接连接）")
-        ssid = field("2.4GHz Wi-Fi SSID"); password = field("Wi-Fi 密码")
-        host = field("OpenWrt 路由器 IPv4", currentGatewayIpv4()); phoneIp = field("手机 Wi-Fi IPv4（路由器端口转发目标）", currentWifiIpv4()); deviceStaMac = field("G3 Wi-Fi STA MAC（从路由器 DHCP 获取）"); g3Ip = field("G3 当前 DHCP IPv4（确认后填写）"); sshUser = field("OpenWrt SSH 用户名", "root"); sshPassword = field("OpenWrt SSH 密码").apply { inputType = 129 }; mac = field("虚拟网关 MAC", "020000000001"); firmwareVersion = field("OTA 目标标签（内置 RC7：V99.00.00）", G3FirmwareValidator.BUNDLED_OTA_VERSION)
-        section("network", "01 网络环境", "OpenWrt SSH、手机地址、G3 DHCP 身份与临时规则")
-        layout.addView(Button(this).apply { text="OpenWrt：安装 G3 专用临时转发规则（SSH）"; setOnClickListener { installRouterSession() } })
-        layout.addView(Button(this).apply { text="OpenWrt：删除本次临时转发规则"; setOnClickListener { removeRouterSession() } })
-        layout.addView(Button(this).apply { text="④ 配网后读取 DHCP 租约并绑定 G3"; setOnClickListener { discoverAndBindG3() } })
-        section("gateway", "03 虚拟网关", "手机 HTTPS、DNS 与 MQTT 服务状态")
-        layout.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
-        section("ble", "02 蓝牙配网", "扫描、连接、BLUFi 握手、Wi-Fi 配网与独立网关身份")
-        layout.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
-        layout.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
-        layout.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
-        layout.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
-        layout.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
-        layout.addView(Button(this).apply { text="仅补发虚拟网关 MAC（已配网，短按网络键后连接）"; setOnClickListener { provision(gatewayOnly=true) } })
-        section("diagnostics", "05 实时诊断", "网关应答观察与 DNS、HTTPS、SSH、MQTT 诊断日志")
-        layout.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
-        layout.addView(Button(this).apply { text="查看 MQTT 链路诊断（最近100条）"; setOnClickListener { showMqttDiagnostics() } })
-        section("firmware", "04 固件迁移", "固件选择、校验与受保护的 ESP32 OTA")
-        layout.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
-        layout.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
-        val contentScroll = ScrollView(this).apply {
-            isFillViewport=true
-            addView(layout)
-        }
-        val navigation = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(6, 6, 6, 6)
-        }
+        val pages = linkedMapOf<String, ScrollView>()
+        val navigation = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
         val navScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
+            isHorizontalScrollBarEnabled=false
             addView(navigation)
         }
-        listOf(
-            "network" to "网络",
-            "ble" to "蓝牙",
-            "gateway" to "网关",
-            "firmware" to "固件",
-            "diagnostics" to "诊断"
-        ).forEach { (key, label) ->
-            navigation.addView(Button(this).apply {
-                text = label
-                textSize = 12f
-                minWidth = 0
-                setPadding(12, 4, 12, 4)
-                setOnClickListener {
-                    pageAnchors[key]?.let { anchor ->
-                        contentScroll.post { contentScroll.smoothScrollTo(0, anchor.top) }
-                    }
-                }
-            }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = 4 })
+        val content = android.widget.FrameLayout(this)
+        fun createPage(key: String, title: String, subtitle: String): LinearLayout {
+            val page = LinearLayout(this).apply {
+                orientation=LinearLayout.VERTICAL
+                setPadding(20,12,20,12)
+                addView(TextView(this@MainActivity).apply {
+                    text=title
+                    textSize=22f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                })
+                addView(TextView(this@MainActivity).apply { text=subtitle; setPadding(0,8,0,16) })
+            }
+            val scroll = ScrollView(this).apply { isFillViewport=true; addView(page) }
+            pages[key]=scroll
+            content.addView(scroll, android.widget.FrameLayout.LayoutParams(-1,-1))
+            return page
         }
-        root.addView(navScroll, LinearLayout.LayoutParams(-1, -2))
-        root.addView(contentScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        fun field(page: LinearLayout, h: String, initial: String = ""): EditText = EditText(this).apply {
+            hint=h; setText(initial); page.addView(this)
+        }
+        run {
+            val page=createPage("network","01 网络环境","先准备路由器规则；配网后确认 G3 DHCP 身份。")
+            host=field(page,"OpenWrt 路由器 IPv4",currentGatewayIpv4())
+            sshUser=field(page,"OpenWrt SSH 用户名","root")
+            sshPassword=field(page,"OpenWrt SSH 密码").apply { inputType=129 }
+            phoneIp=field(page,"手机 Wi-Fi IPv4（路由器端口转发目标）",currentWifiIpv4())
+            deviceStaMac=field(page,"G3 Wi-Fi STA MAC（从路由器 DHCP 获取）")
+            g3Ip=field(page,"G3 当前 DHCP IPv4（确认后填写）")
+        page.addView(Button(this).apply { text="OpenWrt：安装 G3 专用临时转发规则（SSH）"; setOnClickListener { installRouterSession() } })
+        page.addView(Button(this).apply { text="OpenWrt：删除本次临时转发规则"; setOnClickListener { removeRouterSession() } })
+        page.addView(Button(this).apply { text="④ 配网后读取 DHCP 租约并绑定 G3"; setOnClickListener { discoverAndBindG3() } })
+        }
+        run {
+            val page=createPage("ble","02 蓝牙配网","启动网关服务后扫描、连接并发送 Wi-Fi 配置。")
+            selector=Spinner(this); page.addView(selector)
+            bleAddress=field(page,"BLE MAC（可选，支持直接连接）")
+            ssid=field(page,"2.4GHz Wi-Fi SSID")
+            password=field(page,"Wi-Fi 密码").apply { inputType=129 }
+        page.addView(Button(this).apply { text="② 扫描 G3 BLE 设备"; setOnClickListener { scan() } })
+        page.addView(Button(this).apply { text="连接扫描选中设备"; setOnClickListener { connect() } })
+        page.addView(Button(this).apply { text="按 MAC 直接连接"; setOnClickListener { connectAddress() } })
+        page.addView(Button(this).apply { text="重试 BLUFi 握手（读取版本）"; setOnClickListener { requestBlufiVersion(retry=true) } })
+        page.addView(Button(this).apply { text="③ 发送 Wi-Fi 配网（不刷机）"; setOnClickListener { provision() } })
+        page.addView(Button(this).apply { text="仅补发虚拟网关 MAC（已配网，短按网络键后连接）"; setOnClickListener { provision(gatewayOnly=true) } })
+        }
+        run {
+            val page=createPage("gateway","03 虚拟网关","配网前启动服务；观察五项网关请求与应答。")
+            mac=field(page,"虚拟网关 MAC","020000000001")
+        page.addView(Button(this).apply { text="① 启动手机 HTTPS/MQTT 服务（配网前）"; setOnClickListener { startLocalHttps() } })
+        page.addView(Button(this).apply { text="查看五项网关应答"; setOnClickListener { showGatewayAcks() } })
+        }
+        run {
+            val page=createPage("firmware","04 固件迁移","仅在满足现有安全检查后触发 OTA。")
+            firmwareVersion=field(page,"OTA 目标标签（内置 RC7：V99.00.00）",G3FirmwareValidator.BUNDLED_OTA_VERSION)
+        page.addView(Button(this).apply { text="高级：手动选择其他 G3 raw 固件"; setOnClickListener { chooseFirmware() } })
+        page.addView(Button(this).apply { text="触发 ESP32 OTA（严格检查后单次发送）"; setOnClickListener { triggerOta() } })
+        }
+        run {
+            val page=createPage("diagnostics","05 实时诊断","查看网络与 MQTT 日志；下方保留操作反馈。")
+        page.addView(Button(this).apply { text="查看网络与 MQTT 实时诊断"; setOnClickListener { showMqttDiagnostics() } })
+        }
+        val navButtons=linkedMapOf<String,Button>()
+        fun selectPage(key: String) {
+            pages.forEach { (id, view) -> view.visibility=if(id==key) android.view.View.VISIBLE else android.view.View.GONE }
+            navButtons.forEach { (id, button) -> button.isEnabled=id!=key }
+        }
+        listOf("network" to "网络","ble" to "蓝牙","gateway" to "网关","firmware" to "固件","diagnostics" to "诊断").forEach { (key,label) ->
+            val button=Button(this).apply { text=label; textSize=12f; minWidth=0; setOnClickListener { selectPage(key) } }
+            navButtons[key]=button
+            navigation.addView(button,LinearLayout.LayoutParams(-2,-2))
+        }
+        selectPage("network")
+        root.addView(navScroll,LinearLayout.LayoutParams(-1,-2))
+        root.addView(content,LinearLayout.LayoutParams(-1,0,1f))
         output=TextView(this).apply { textSize=12f; setPadding(16,8,16,8) }
         root.addView(ScrollView(this).apply { addView(output) },
             LinearLayout.LayoutParams(-1,(180*resources.displayMetrics.density).toInt()))
