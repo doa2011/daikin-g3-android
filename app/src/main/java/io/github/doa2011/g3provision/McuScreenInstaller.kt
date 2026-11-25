@@ -213,7 +213,6 @@ internal class McuScreenInstaller(private val context: Context) {
 
     private fun Value.obj(key: String): Value = asMapValue().getValue(ValueFactory.newString(key))
     private fun Value.str(key: String): String = obj(key).asStringValue().asString()
-    private fun Value.strOrNull(key: String): String? = try { str(key) } catch (_: Exception) { null }
     private fun Value.bool(key: String): Boolean = try { obj(key).asBooleanValue().boolean } catch (_: Exception) { false }
     private fun Value.scalar(key: String): String = try {
         val v = obj(key)
