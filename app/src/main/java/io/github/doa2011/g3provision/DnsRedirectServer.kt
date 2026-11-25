@@ -10,7 +10,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Small split-DNS responder for one G3 client, exposed only on the LAN via router DNAT. */
+/** Split-DNS responder: synthesizes answers only for the three Daikin service domains. */
 class DnsRedirectServer(
     private val upstreamIp: String,
     private val syntheticARecordIp: String,
@@ -20,11 +20,7 @@ class DnsRedirectServer(
     private val running = AtomicBoolean(false)
     private var udp: DatagramSocket? = null
     private var tcp: ServerSocket? = null
-    private val names = setOf(
-        "newlifemulti.daikin-china.com.cn",
-        "newlifemulti-cdh.daikin-china.com.cn",
-        "newlifemulti-cdh-core.daikin-china.com.cn"
-    )
+    private val names = TARGET_DOMAINS.toSet()
 
     @Synchronized fun start() {
         check(running.compareAndSet(false, true)) { "DNS 服务已经启动" }
@@ -122,6 +118,14 @@ class DnsRedirectServer(
         }
     }
 
+    companion object {
+        val TARGET_DOMAINS = listOf(
+            "newlifemulti.daikin-china.com.cn",
+            "newlifemulti-cdh.daikin-china.com.cn",
+            "newlifemulti-cdh-core.daikin-china.com.cn"
+        )
+    }
+
     private data class Question(val name: String, val type: Int, val end: Int)
 
     private fun parseQuestion(data: ByteArray): Question? {
@@ -139,6 +143,8 @@ class DnsRedirectServer(
         val type = ((data[p].toInt() and 255) shl 8) or (data[p + 1].toInt() and 255)
         return Question(labels.joinToString("."), type, p + 4)
     }
+
+    internal fun isDaikinTarget(name: String): Boolean = name.lowercase() in names
 
     private fun forward(query: ByteArray, tcpMode: Boolean): ByteArray {
         if (tcpMode) {
