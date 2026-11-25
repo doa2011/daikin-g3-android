@@ -97,7 +97,429 @@ elif command -v fw3 >/dev/null 2>&1; then
 else exit 70; fi
 printf 'id=%s\nrouter=%s\nphone=%s\nbackend=%s\n' "${'$'}ID" "${'$'}ROUTER" "${'$'}PHONE" "${'$'}BACKEND" > "${'$'}SESSION"
 trap - EXIT HUP INT TERM
-echo "ACTIVE $ID backend=$BACKEND split-dns=three-daikin-domains"
+echo "ACTIVE ${'
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,id,r.second)
+    }
+
+    fun cleanup(routerIp: String, user: String, password: String, sessionId: String): Result {
+        require(validIp(routerIp) && sessionId.matches(Regex("[a-f0-9]{32}")))
+        val script = """
+set -eu
+ID='$sessionId'; SESSION="/root/g3-migration-$sessionId.session"
+FWBACK="/root/g3-migration-$sessionId.firewall.bak"; DHCPBACK="/root/g3-migration-$sessionId.dhcp.bak"
+FWROLL="/tmp/g3mig-$sessionId.fw.rollback"; DHROLL="/tmp/g3mig-$sessionId.dhcp.rollback"
+[ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ]
+[ -f "${'$'}SESSION" ] && grep -Fqx "id=${'$'}ID" "${'$'}SESSION"
+cp /etc/config/firewall "${'$'}FWROLL"; cp /etc/config/dhcp "${'$'}DHROLL"
+rollback() { rc=${'$'}?; if [ "${'$'}rc" -ne 0 ]; then cp "${'$'}FWROLL" /etc/config/firewall; cp "${'$'}DHROLL" /etc/config/dhcp; uci revert firewall || true; uci revert dhcp || true; /etc/init.d/dnsmasq restart || true; /etc/init.d/firewall reload || true; fi; }
+trap rollback EXIT HUP INT TERM
+for suffix in https mqtt; do
+ s="g3mig_${'$'}{ID}_${'$'}suffix"; owner="$(uci -q get firewall.${'$'}s.g3mig_owner || true)"
+ if [ -n "${'$'}owner" ]; then [ "${'$'}owner" = "${'$'}ID" ]; uci -q delete firewall.${'$'}s; fi
+done
+PHONE="$(sed -n 's/^phone=//p' "${'$'}SESSION")"; [ -n "${'$'}PHONE" ]
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}e"; fi
+done
+uci commit dhcp; uci commit firewall
+/etc/init.d/dnsmasq restart; /etc/init.d/firewall reload
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then exit 75; fi
+done
+for suffix in https mqtt; do s="g3mig_${'$'}{ID}_${'$'}suffix"; ! uci -q get firewall.${'$'}s >/dev/null 2>&1; done
+rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK" "${'$'}FWROLL" "${'$'}DHROLL" "/tmp/g3mig-${'$'}ID.nft" "/tmp/g3mig-${'$'}ID.iptables"
+trap - EXIT HUP INT TERM; echo "CLEANED ${'
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,sessionId,r.second)
+    }
+
+    private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
+        val keys = AcceptHostKey()
+        val session = JSch().getSession(user,host,22)
+        session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
+        session.hostKeyRepository = keys
+        session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
+        try {
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
+            channel.setCommand("sh -s")
+            val stdout = ByteArrayOutputStream()
+            val stderr = ByteArrayOutputStream()
+            channel.setOutputStream(stdout)
+            channel.setErrStream(stderr)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
+            channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
+            val deadline = System.currentTimeMillis() + 25000
+            while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
+            val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
+            val code = channel.exitStatus
+            channel.disconnect()
+            check(code == 0) { "OpenWrt 命令失败（退出码 $code）：$output" }
+            return output to keys.fingerprint
+        } finally { session.disconnect() }
+    }
+
+    private fun validIp(ip: String): Boolean = ip.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
+        ip.split(".").all { it.toInt() in 0..255 }
+}}ID backend=${'
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,id,r.second)
+    }
+
+    fun cleanup(routerIp: String, user: String, password: String, sessionId: String): Result {
+        require(validIp(routerIp) && sessionId.matches(Regex("[a-f0-9]{32}")))
+        val script = """
+set -eu
+ID='$sessionId'; SESSION="/root/g3-migration-$sessionId.session"
+FWBACK="/root/g3-migration-$sessionId.firewall.bak"; DHCPBACK="/root/g3-migration-$sessionId.dhcp.bak"
+FWROLL="/tmp/g3mig-$sessionId.fw.rollback"; DHROLL="/tmp/g3mig-$sessionId.dhcp.rollback"
+[ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ]
+[ -f "${'$'}SESSION" ] && grep -Fqx "id=${'$'}ID" "${'$'}SESSION"
+cp /etc/config/firewall "${'$'}FWROLL"; cp /etc/config/dhcp "${'$'}DHROLL"
+rollback() { rc=${'$'}?; if [ "${'$'}rc" -ne 0 ]; then cp "${'$'}FWROLL" /etc/config/firewall; cp "${'$'}DHROLL" /etc/config/dhcp; uci revert firewall || true; uci revert dhcp || true; /etc/init.d/dnsmasq restart || true; /etc/init.d/firewall reload || true; fi; }
+trap rollback EXIT HUP INT TERM
+for suffix in https mqtt; do
+ s="g3mig_${'$'}{ID}_${'$'}suffix"; owner="$(uci -q get firewall.${'$'}s.g3mig_owner || true)"
+ if [ -n "${'$'}owner" ]; then [ "${'$'}owner" = "${'$'}ID" ]; uci -q delete firewall.${'$'}s; fi
+done
+PHONE="$(sed -n 's/^phone=//p' "${'$'}SESSION")"; [ -n "${'$'}PHONE" ]
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}e"; fi
+done
+uci commit dhcp; uci commit firewall
+/etc/init.d/dnsmasq restart; /etc/init.d/firewall reload
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then exit 75; fi
+done
+for suffix in https mqtt; do s="g3mig_${'$'}{ID}_${'$'}suffix"; ! uci -q get firewall.${'$'}s >/dev/null 2>&1; done
+rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK" "${'$'}FWROLL" "${'$'}DHROLL" "/tmp/g3mig-${'$'}ID.nft" "/tmp/g3mig-${'$'}ID.iptables"
+trap - EXIT HUP INT TERM; echo "CLEANED $ID"
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,sessionId,r.second)
+    }
+
+    private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
+        val keys = AcceptHostKey()
+        val session = JSch().getSession(user,host,22)
+        session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
+        session.hostKeyRepository = keys
+        session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
+        try {
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
+            channel.setCommand("sh -s")
+            val stdout = ByteArrayOutputStream()
+            val stderr = ByteArrayOutputStream()
+            channel.setOutputStream(stdout)
+            channel.setErrStream(stderr)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
+            channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
+            val deadline = System.currentTimeMillis() + 25000
+            while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
+            val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
+            val code = channel.exitStatus
+            channel.disconnect()
+            check(code == 0) { "OpenWrt 命令失败（退出码 $code）：$output" }
+            return output to keys.fingerprint
+        } finally { session.disconnect() }
+    }
+
+    private fun validIp(ip: String): Boolean = ip.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
+        ip.split(".").all { it.toInt() in 0..255 }
+}}BACKEND split-dns=three-daikin-domains"
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,id,r.second)
+    }
+
+    fun cleanup(routerIp: String, user: String, password: String, sessionId: String): Result {
+        require(validIp(routerIp) && sessionId.matches(Regex("[a-f0-9]{32}")))
+        val script = """
+set -eu
+ID='$sessionId'; SESSION="/root/g3-migration-$sessionId.session"
+FWBACK="/root/g3-migration-$sessionId.firewall.bak"; DHCPBACK="/root/g3-migration-$sessionId.dhcp.bak"
+FWROLL="/tmp/g3mig-$sessionId.fw.rollback"; DHROLL="/tmp/g3mig-$sessionId.dhcp.rollback"
+[ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ]
+[ -f "${'$'}SESSION" ] && grep -Fqx "id=${'$'}ID" "${'$'}SESSION"
+cp /etc/config/firewall "${'$'}FWROLL"; cp /etc/config/dhcp "${'$'}DHROLL"
+rollback() { rc=${'$'}?; if [ "${'$'}rc" -ne 0 ]; then cp "${'$'}FWROLL" /etc/config/firewall; cp "${'$'}DHROLL" /etc/config/dhcp; uci revert firewall || true; uci revert dhcp || true; /etc/init.d/dnsmasq restart || true; /etc/init.d/firewall reload || true; fi; }
+trap rollback EXIT HUP INT TERM
+for suffix in https mqtt; do
+ s="g3mig_${'$'}{ID}_${'$'}suffix"; owner="$(uci -q get firewall.${'$'}s.g3mig_owner || true)"
+ if [ -n "${'$'}owner" ]; then [ "${'$'}owner" = "${'$'}ID" ]; uci -q delete firewall.${'$'}s; fi
+done
+PHONE="$(sed -n 's/^phone=//p' "${'$'}SESSION")"; [ -n "${'$'}PHONE" ]
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}e"; fi
+done
+uci commit dhcp; uci commit firewall
+/etc/init.d/dnsmasq restart; /etc/init.d/firewall reload
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then exit 75; fi
+done
+for suffix in https mqtt; do s="g3mig_${'$'}{ID}_${'$'}suffix"; ! uci -q get firewall.${'$'}s >/dev/null 2>&1; done
+rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK" "${'$'}FWROLL" "${'$'}DHROLL" "/tmp/g3mig-${'$'}ID.nft" "/tmp/g3mig-${'$'}ID.iptables"
+trap - EXIT HUP INT TERM; echo "CLEANED $ID"
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,sessionId,r.second)
+    }
+
+    private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
+        val keys = AcceptHostKey()
+        val session = JSch().getSession(user,host,22)
+        session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
+        session.hostKeyRepository = keys
+        session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
+        try {
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
+            channel.setCommand("sh -s")
+            val stdout = ByteArrayOutputStream()
+            val stderr = ByteArrayOutputStream()
+            channel.setOutputStream(stdout)
+            channel.setErrStream(stderr)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
+            channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
+            val deadline = System.currentTimeMillis() + 25000
+            while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
+            val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
+            val code = channel.exitStatus
+            channel.disconnect()
+            check(code == 0) { "OpenWrt 命令失败（退出码 $code）：$output" }
+            return output to keys.fingerprint
+        } finally { session.disconnect() }
+    }
+
+    private fun validIp(ip: String): Boolean = ip.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
+        ip.split(".").all { it.toInt() in 0..255 }
+}}ID"
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,sessionId,r.second)
+    }
+
+    private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
+        val keys = AcceptHostKey()
+        val session = JSch().getSession(user,host,22)
+        session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
+        session.hostKeyRepository = keys
+        session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
+        try {
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
+            channel.setCommand("sh -s")
+            val stdout = ByteArrayOutputStream()
+            val stderr = ByteArrayOutputStream()
+            channel.setOutputStream(stdout)
+            channel.setErrStream(stderr)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
+            channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
+            val deadline = System.currentTimeMillis() + 25000
+            while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
+            val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
+            val code = channel.exitStatus
+            channel.disconnect()
+            check(code == 0) { "OpenWrt 命令失败（退出码 $code）：$output" }
+            return output to keys.fingerprint
+        } finally { session.disconnect() }
+    }
+
+    private fun validIp(ip: String): Boolean = ip.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
+        ip.split(".").all { it.toInt() in 0..255 }
+}}ID backend=${'
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,id,r.second)
+    }
+
+    fun cleanup(routerIp: String, user: String, password: String, sessionId: String): Result {
+        require(validIp(routerIp) && sessionId.matches(Regex("[a-f0-9]{32}")))
+        val script = """
+set -eu
+ID='$sessionId'; SESSION="/root/g3-migration-$sessionId.session"
+FWBACK="/root/g3-migration-$sessionId.firewall.bak"; DHCPBACK="/root/g3-migration-$sessionId.dhcp.bak"
+FWROLL="/tmp/g3mig-$sessionId.fw.rollback"; DHROLL="/tmp/g3mig-$sessionId.dhcp.rollback"
+[ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ]
+[ -f "${'$'}SESSION" ] && grep -Fqx "id=${'$'}ID" "${'$'}SESSION"
+cp /etc/config/firewall "${'$'}FWROLL"; cp /etc/config/dhcp "${'$'}DHROLL"
+rollback() { rc=${'$'}?; if [ "${'$'}rc" -ne 0 ]; then cp "${'$'}FWROLL" /etc/config/firewall; cp "${'$'}DHROLL" /etc/config/dhcp; uci revert firewall || true; uci revert dhcp || true; /etc/init.d/dnsmasq restart || true; /etc/init.d/firewall reload || true; fi; }
+trap rollback EXIT HUP INT TERM
+for suffix in https mqtt; do
+ s="g3mig_${'$'}{ID}_${'$'}suffix"; owner="$(uci -q get firewall.${'$'}s.g3mig_owner || true)"
+ if [ -n "${'$'}owner" ]; then [ "${'$'}owner" = "${'$'}ID" ]; uci -q delete firewall.${'$'}s; fi
+done
+PHONE="$(sed -n 's/^phone=//p' "${'$'}SESSION")"; [ -n "${'$'}PHONE" ]
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then uci -q del_list dhcp.@dnsmasq[0].server="${'$'}e"; fi
+done
+uci commit dhcp; uci commit firewall
+/etc/init.d/dnsmasq restart; /etc/init.d/firewall reload
+for d in newlifemulti.daikin-china.com.cn newlifemulti-cdh.daikin-china.com.cn newlifemulti-cdh-core.daikin-china.com.cn; do
+ e="/${'$'}d/${'$'}PHONE#1053"; if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "${'$'}e"; then exit 75; fi
+done
+for suffix in https mqtt; do s="g3mig_${'$'}{ID}_${'$'}suffix"; ! uci -q get firewall.${'$'}s >/dev/null 2>&1; done
+rm -f "${'$'}SESSION" "${'$'}FWBACK" "${'$'}DHCPBACK" "${'$'}FWROLL" "${'$'}DHROLL" "/tmp/g3mig-${'$'}ID.nft" "/tmp/g3mig-${'$'}ID.iptables"
+trap - EXIT HUP INT TERM; echo "CLEANED $ID"
+""".trimIndent() + "\n"
+        val r = run(routerIp,user,password,script)
+        return Result(r.first,sessionId,r.second)
+    }
+
+    private fun run(host: String, user: String, password: String, script: String): Pair<String,String> {
+        // Distinguish LAN reachability/Dropbear port failures from SSH authentication and exec-channel failures.
+        try {
+            Socket().use { probe ->
+                probe.connect(InetSocketAddress(host, 22), 4000)
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("TCP 22 不可达：请确认手机与 OpenWrt 在同一 LAN、路由器 IP 正确且 Dropbear 正在监听。原始错误：${e.message}", e)
+        }
+
+        val keys = AcceptHostKey()
+        val session = JSch().getSession(user,host,22)
+        session.setPassword(password)
+        session.setUserInfo(PasswordAuth(password))
+        session.hostKeyRepository = keys
+        session.setConfig("StrictHostKeyChecking","yes")
+        session.setConfig("PreferredAuthentications","keyboard-interactive,password")
+        try {
+            try {
+                session.connect(15000)
+            } catch (e: Exception) {
+                throw IllegalStateException("TCP 22 可达，但 SSH 握手/认证失败：请检查账号、密码、Dropbear 认证配置。原始错误：${e.message}", e)
+            }
+            val channel = try {
+                session.openChannel("exec") as com.jcraft.jsch.ChannelExec
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已连接，但无法创建 exec 命令通道：${e.message}", e)
+            }
+            channel.setCommand("sh -s")
+            val stdout = ByteArrayOutputStream()
+            val stderr = ByteArrayOutputStream()
+            channel.setOutputStream(stdout)
+            channel.setErrStream(stderr)
+            try {
+                channel.connect(12000)
+            } catch (e: Exception) {
+                throw IllegalStateException("SSH 已认证，但 exec 通道建立超时：${e.message}", e)
+            }
+            channel.outputStream.use { it.write(script.toByteArray(StandardCharsets.UTF_8)); it.flush() }
+            val deadline = System.currentTimeMillis() + 25000
+            while (!channel.isClosed && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            if (!channel.isClosed) { channel.disconnect(); error("OpenWrt SSH 命令执行超过 25 秒") }
+            val output = stdout.toString("UTF-8") + stderr.toString("UTF-8")
+            val code = channel.exitStatus
+            channel.disconnect()
+            check(code == 0) { "OpenWrt 命令失败（退出码 $code）：$output" }
+            return output to keys.fingerprint
+        } finally { session.disconnect() }
+    }
+
+    private fun validIp(ip: String): Boolean = ip.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) &&
+        ip.split(".").all { it.toInt() in 0..255 }
+}}BACKEND split-dns=three-daikin-domains"
 """.trimIndent() + "\n"
         val r = run(routerIp,user,password,script)
         return Result(r.first,id,r.second)
