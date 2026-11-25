@@ -12,7 +12,7 @@ import java.util.UUID
 import java.net.InetSocketAddress
 import java.net.Socket
 
-/** Two-phase OpenWrt setup: stage inert rules before Wi-Fi provisioning, bind after DHCP. */
+/** OpenWrt split-DNS session for three Daikin domains; no device lease binding. */
 object RouterBootstrap {
     data class Result(val output: String, val sessionId: String = "", val hostFingerprint: String = "")
 
@@ -94,18 +94,18 @@ rollback() {
 trap rollback EXIT HUP INT TERM
 
 # Only the three Daikin DNS zones are forwarded to the phone resolver.
-uci add_list dhcp.@dnsmasq[0].server='/newlifemulti.daikin-china.com.cn/$PHONE#1053'
-uci add_list dhcp.@dnsmasq[0].server='/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053'
-uci add_list dhcp.@dnsmasq[0].server='/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053'
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti.daikin-china.com.cn/$PHONE#1053"
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053"
+uci add_list dhcp.@dnsmasq[0].server="/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053"
 
 uci set firewall.$HTTPS=redirect
 uci set firewall.$HTTPS.name='G3 migration Daikin HTTPS'
-uci set firewall.$HTTPS.g3mig_owner='$ID'
+uci set firewall.$HTTPS.g3mig_owner="$ID"
 uci set firewall.$HTTPS.src=lan
-uci set firewall.$HTTPS.src_dip='$ROUTER'
+uci set firewall.$HTTPS.src_dip="$ROUTER"
 uci set firewall.$HTTPS.src_dport=443
 uci set firewall.$HTTPS.dest=lan
-uci set firewall.$HTTPS.dest_ip='$PHONE'
+uci set firewall.$HTTPS.dest_ip="$PHONE"
 uci set firewall.$HTTPS.dest_port=8443
 uci set firewall.$HTTPS.proto=tcp
 uci set firewall.$HTTPS.target=DNAT
@@ -113,12 +113,12 @@ uci set firewall.$HTTPS.enabled=1
 
 uci set firewall.$MQTT=redirect
 uci set firewall.$MQTT.name='G3 migration Daikin MQTT TLS'
-uci set firewall.$MQTT.g3mig_owner='$ID'
+uci set firewall.$MQTT.g3mig_owner="$ID"
 uci set firewall.$MQTT.src=lan
-uci set firewall.$MQTT.src_dip='$ROUTER'
+uci set firewall.$MQTT.src_dip="$ROUTER"
 uci set firewall.$MQTT.src_dport=8883
 uci set firewall.$MQTT.dest=lan
-uci set firewall.$MQTT.dest_ip='$PHONE'
+uci set firewall.$MQTT.dest_ip="$PHONE"
 uci set firewall.$MQTT.dest_port=18883
 uci set firewall.$MQTT.proto=tcp
 uci set firewall.$MQTT.target=DNAT
@@ -185,11 +185,11 @@ for suffix in https mqtt; do
 done
 PHONE="$(sed -n 's/^phone=//p' "$SESSION")"
 [ -n "$PHONE" ] || { echo 'Phone address missing from session record' >&2; exit 74; }
-entry='/newlifemulti.daikin-china.com.cn/$PHONE#1053'
+entry="/newlifemulti.daikin-china.com.cn/$PHONE#1053"
 if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
-entry='/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053'
+entry="/newlifemulti-cdh.daikin-china.com.cn/$PHONE#1053"
 if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
-entry='/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053'
+entry="/newlifemulti-cdh-core.daikin-china.com.cn/$PHONE#1053"
 if uci -q get dhcp.@dnsmasq[0].server | grep -Fqx "$entry"; then uci -q del_list dhcp.@dnsmasq[0].server="$entry"; fi
 uci commit dhcp
 uci commit firewall
