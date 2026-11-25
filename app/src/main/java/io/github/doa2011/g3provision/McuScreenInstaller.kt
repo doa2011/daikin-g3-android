@@ -211,7 +211,7 @@ internal class McuScreenInstaller(private val context: Context) {
         }
     }
 
-    private fun Value.obj(key: String): Value = asMapValue().get(ValueFactory.newString(key)) ?: error("Missing MessagePack field: " + key)
+    private fun Value.obj(key: String): Value = asMapValue().map().get(ValueFactory.newString(key)) ?: error("Missing MessagePack field: " + key)
     private fun Value.str(key: String): String = obj(key).asStringValue().asString()
     private fun Value.bool(key: String): Boolean = try { obj(key).asBooleanValue().boolean } catch (_: Exception) { false }
     private fun Value.scalar(key: String): String = try {
