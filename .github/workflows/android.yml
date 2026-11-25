@@ -22,6 +22,14 @@ jobs:
           gradle-version: '8.9'
       - name: Download and verify upstream G3 ESP32 OTA image
         run: bash scripts/prepare_g3_firmware.sh
+      - name: Download and verify upstream G3 screen MCU image
+        run: |
+          mkdir -p app/src/main/assets/g3
+          curl --fail --location --retry 3 \
+            https://github.com/phicomm-io/iotcloud-bry88bba15g-screenmcu/releases/download/screen-c59386c429871bc26339c7a6a19cfd5623241814/screen_firmware.bin \
+            -o app/src/main/assets/g3/daikin_G3_screen.bin
+          echo "9cafaae14b47afd03c3bc0f53b63f4b7a2a99225ac0732ba39a8a6f18c3bf6c9  app/src/main/assets/g3/daikin_G3_screen.bin" | sha256sum --check
+          test "$(stat -c%s app/src/main/assets/g3/daikin_G3_screen.bin)" = "421888"
       - name: Run BLUFi and Android unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
       - run: gradle --no-daemon :app:assembleDebug
