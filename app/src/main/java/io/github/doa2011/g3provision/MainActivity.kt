@@ -797,11 +797,65 @@ class MainActivity : Activity() {
         panel.addView(Button(this).apply { text="选择并校验 ESP32 raw 固件"; setOnClickListener { chooseFirmware() } })
         android.app.AlertDialog.Builder(this).setTitle("迁移高级设置").setView(panel).setPositiveButton("完成",null).show()
     }
+    @Volatile private var mcuInstallRunning = false
+
     private fun showMcuUpgradeStatus() {
-        android.app.AlertDialog.Builder(this).setTitle("屏幕 MCU 固件升级")
-            .setMessage("当前 APK 已有 MCU 只读探针状态机测试，但尚未接入经过上游源码核实的 MCU 写入/升级传输适配器。为避免向屏幕 MCU 发送未经确认的命令，本按钮暂不发送升级数据。待确认设备端已上传的镜像、版本探针及真实升级接口后再启用。")
-            .setPositiveButton("知道了",null).show()
-        note("MCU 升级请求：当前仅有探针协调器，无真实升级传输适配器；未发送任何 MCU 命令。")
+        val ip = g3Ip.text.toString().trim()
+        if (!isPrivateIpv4(ip)) {
+            android.app.AlertDialog.Builder(this).setTitle("需要 G3 局域网地址")
+                .setMessage("请先在「迁移 → 高级」中填写 G3 当前 IPv4 地址。")
+                .setPositiveButton("知道了", null).show()
+            note("MCU 安装未启动：G3 IP 地址为空或不是私有局域网 IPv4。")
+            return
+        }
+        if (mcuInstallRunning) {
+            note("MCU 安装正在运行，不重复触发。")
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("首次安装社区屏幕 MCU")
+            .setMessage("将使用 APK 内置的上游社区 MCU 固件（BRY88BBA15G，421888 字节）。流程对应上游 flash_screen.py --mode install：检查设备型号、上传并校验 SHA-256、自动识别原厂/社区安装路径、通过 ESP32 UART 安装，并验证 MCU 新会话、内部 MD5 和 normal 状态。安装期间请保持手机与 G3 在同一局域网并保持设备供电。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("开始安装") { _, _ -> startMcuInstall(ip) }
+            .show()
+    }
+
+    private fun isPrivateIpv4(value: String): Boolean {
+        val p = value.split(".").mapNotNull { it.toIntOrNull() }
+        if (p.size != 4 || p.any { it !in 0..255 }) return false
+        return p[0] == 10 || (p[0] == 192 && p[1] == 168) ||
+            (p[0] == 172 && p[1] in 16..31)
+    }
+
+    private fun startMcuInstall(ip: String) {
+        if (mcuInstallRunning) return
+        mcuInstallRunning = true
+        note("MCU：开始执行上游 install 流程，目标 http://$ip")
+        MigrationDiagnostics.append(this, "MCU install START target=$ip")
+        Thread {
+            try {
+                val result = McuScreenInstaller(this).install("http://$ip") { event ->
+                    runOnUiThread { note("MCU：$event") }
+                }
+                MigrationDiagnostics.append(this, "MCU install VERIFIED sha256=\${result.sha256} md5=\${result.md5} mode=\${result.mode}")
+                runOnUiThread {
+                    note("MCU：安装验证成功，mode=\${result.mode}，MD5=\${result.md5}")
+                    android.app.AlertDialog.Builder(this).setTitle("MCU 安装验证成功")
+                        .setMessage("新 MCU 已正常启动，内部 MD5 与 APK 内固件一致。\\nSHA-256：\${result.sha256}\\nMD5：\${result.md5}")
+                        .setPositiveButton("完成", null).show()
+                }
+            } catch (e: Exception) {
+                MigrationDiagnostics.append(this, "MCU install FAILED \${e.javaClass.simpleName}: \${e.message}")
+                runOnUiThread {
+                    note("MCU：安装失败：" + (e.message ?: e.javaClass.simpleName))
+                    android.app.AlertDialog.Builder(this).setTitle("MCU 安装未验证成功")
+                        .setMessage(e.message ?: e.javaClass.simpleName)
+                        .setPositiveButton("知道了", null).show()
+                }
+            } finally {
+                mcuInstallRunning = false
+            }
+        }.start()
     }
 
 
