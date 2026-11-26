@@ -154,39 +154,32 @@ class G3TlsIdentity(private val service:Service) {
     private val hostFile=File(dir,"certificate-host.txt")
     private val formatFile=File(dir,"identity-format.txt")
     private val pass=("g3-"+service.packageName+"-private").toCharArray()
-    private val formatVersion="2"
+    private val formatVersion="3"
     data class Result(val ca:ByteArray,val ssl:SSLContext,val keyStorePath:String,val keyStorePassword:String)
 
     fun load(host:String):Result {
         if(Security.getProvider("BC")==null)Security.addProvider(BouncyCastleProvider())
-        if(!caPem.exists()||!serverPem.exists()||!serverP12.exists()||!caP12.exists()||
+        if(!caPem.exists()||!serverPem.exists()||!serverP12.exists()||
             !hostFile.exists()||!formatFile.exists()||formatFile.readText().trim()!=formatVersion) {
             create(host)
         }
         require(hostFile.readText().trim()==host) {
             "手机 IP 已变化；请固定 DHCP 地址，或在重新配网前重新生成本地证书身份"
         }
-        val caStore=KeyStore.getInstance("PKCS12")
-        caP12.inputStream().use{caStore.load(it,pass)}
-        val root=caStore.getCertificate("root") as X509Certificate
-        val rootKey=caStore.getKey("root",pass) as PrivateKey
-        require(root.basicConstraints>=0) { "本地 Root CA 缺少 CA:TRUE" }
-        require(root.keyUsage?.getOrNull(5)==true) { "本地 Root CA 缺少 keyCertSign" }
-        root.verify(root.publicKey)
-
         val ks=KeyStore.getInstance("PKCS12")
         serverP12.inputStream().use{ks.load(it,pass)}
-        val leaf=ks.getCertificate("g3-server") as X509Certificate
-        val chain=ks.getCertificateChain("g3-server")
-        require(chain.size>=2 && chain[1] is X509Certificate) { "服务器证书链不完整" }
-        require(leaf.basicConstraints==-1) { "服务器证书必须为 CA:FALSE" }
-        require(leaf.issuerX500Principal==root.subjectX500Principal) { "服务器证书签发者与 Root CA 不匹配" }
-        leaf.verify(root.publicKey)
-        require(leaf.extendedKeyUsage?.contains(KeyPurposeId.id_kp_serverAuth.id)==true) {
-            "服务器证书缺少 serverAuth EKU"
-        }
-        require(leaf.subjectAlternativeNames?.any { it.size>=2 && it[0]==7 && it[1]==host }==true) {
-            "服务器证书 SAN 与当前服务 IP 不匹配"
+        val cert=ks.getCertificate("g3-server") as X509Certificate
+        require(ks.getCertificateChain("g3-server").size==1) { "G3 必须使用单一自签名证书" }
+        cert.checkValidity()
+        require(cert.basicConstraints>=0 && cert.subjectX500Principal==cert.issuerX500Principal) { "G3 证书必须自签名且 CA:TRUE" }
+        cert.verify(cert.publicKey)
+        require(listOf(0,2,5,6).all { cert.keyUsage?.getOrNull(it)==true }) { "G3 证书 KeyUsage 不完整" }
+        require(cert.extendedKeyUsage?.contains(KeyPurposeId.id_kp_serverAuth.id)==true) { "G3 证书缺少 serverAuth" }
+        require(cert.subjectAlternativeNames?.any { it.size>=2 && it[0]==7 && it[1]==host }==true) { "G3 证书 SAN 与服务 IP 不匹配" }
+        val factory=java.security.cert.CertificateFactory.getInstance("X.509")
+        for(file in listOf(caPem,serverPem)) {
+            val exported=file.inputStream().use { factory.generateCertificate(it) }
+            require(exported.encoded.contentEquals(cert.encoded)) { "G3 CA 与 TLS 证书不一致" }
         }
         val km=KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         km.init(ks,pass)
@@ -199,56 +192,36 @@ class G3TlsIdentity(private val service:Service) {
         val hostIp=java.net.InetAddress.getByName(host).hostAddress
         val now=System.currentTimeMillis()
         val notBefore=Date(now-300000)
-        val rootName=X500Name("CN=Daikin G3 Local Migration Root CA")
         val serverName=X500Name("CN=newlifemulti.daikin-china.com.cn")
         val kg=KeyPairGenerator.getInstance("RSA")
         kg.initialize(2048,SecureRandom())
-        val rootPair=kg.generateKeyPair()
-        val serverPair=kg.generateKeyPair()
-        val converter=JcaX509CertificateConverter().setProvider("BC")
-
-        val rootBuilder=JcaX509v3CertificateBuilder(
-            rootName,BigInteger(160,SecureRandom()),notBefore,Date(now+3650L*86400000),
-            rootName,rootPair.public)
-        rootBuilder.addExtension(Extension.basicConstraints,true,BasicConstraints(true))
-        rootBuilder.addExtension(Extension.keyUsage,true,KeyUsage(KeyUsage.keyCertSign or KeyUsage.cRLSign))
-        val rootCert=converter.getCertificate(
-            rootBuilder.build(JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(rootPair.private)))
-        rootCert.verify(rootPair.public)
-
-        val leafBuilder=JcaX509v3CertificateBuilder(
-            rootName,BigInteger(160,SecureRandom()),notBefore,Date(now+30L*86400000),
-            serverName,serverPair.public)
-        leafBuilder.addExtension(Extension.basicConstraints,true,BasicConstraints(false))
-        leafBuilder.addExtension(Extension.keyUsage,true,KeyUsage(KeyUsage.digitalSignature or KeyUsage.keyEncipherment))
-        leafBuilder.addExtension(Extension.extendedKeyUsage,false,ExtendedKeyUsage(KeyPurposeId.id_kp_serverAuth))
-        leafBuilder.addExtension(Extension.subjectAlternativeName,false,GeneralNames(arrayOf(
+        val pair=kg.generateKeyPair()
+        val builder=JcaX509v3CertificateBuilder(
+            serverName,BigInteger(159,SecureRandom()).add(BigInteger.ONE),notBefore,Date(now+30L*86400000),
+            serverName,pair.public)
+        builder.addExtension(Extension.basicConstraints,true,BasicConstraints(true))
+        builder.addExtension(Extension.keyUsage,true,KeyUsage(KeyUsage.digitalSignature or KeyUsage.keyEncipherment or KeyUsage.keyCertSign or KeyUsage.cRLSign))
+        builder.addExtension(Extension.extendedKeyUsage,false,ExtendedKeyUsage(KeyPurposeId.id_kp_serverAuth))
+        builder.addExtension(Extension.subjectKeyIdentifier,false,org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils().createSubjectKeyIdentifier(pair.public))
+        builder.addExtension(Extension.subjectAlternativeName,false,GeneralNames(arrayOf(
             GeneralName(GeneralName.dNSName,"newlifemulti.daikin-china.com.cn"),
             GeneralName(GeneralName.dNSName,"newlifemulti-cdh.daikin-china.com.cn"),
             GeneralName(GeneralName.dNSName,"newlifemulti-cdh-core.daikin-china.com.cn"),
             GeneralName(GeneralName.iPAddress,hostIp))))
-        val leafCert=converter.getCertificate(
-            leafBuilder.build(JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(rootPair.private)))
-        leafCert.verify(rootCert.publicKey)
-        require(leafCert.basicConstraints==-1 && leafCert.extendedKeyUsage.contains(KeyPurposeId.id_kp_serverAuth.id)) {
-            "生成的服务器证书扩展属性校验失败"
-        }
-
-        val caStore=KeyStore.getInstance("PKCS12")
-        caStore.load(null,pass)
-        caStore.setKeyEntry("root",rootPair.private,pass,arrayOf(rootCert))
-        caP12.outputStream().use{caStore.store(it,pass)}
-
+        val cert=JcaX509CertificateConverter().setProvider("BC").getCertificate(
+            builder.build(JcaContentSignerBuilder("SHA256withRSA").setProvider("BC").build(pair.private)))
+        cert.verify(pair.public)
         val serverStore=KeyStore.getInstance("PKCS12")
         serverStore.load(null,pass)
-        serverStore.setKeyEntry("g3-server",serverPair.private,pass,arrayOf(leafCert,rootCert))
+        serverStore.setKeyEntry("g3-server",pair.private,pass,arrayOf(cert))
         serverP12.outputStream().use{serverStore.store(it,pass)}
+        caP12.delete()
 
         fun pem(cert:X509Certificate)= "-----BEGIN CERTIFICATE-----\n"+
             Base64.getMimeEncoder(64,byteArrayOf(10)).encodeToString(cert.encoded)+
             "\n-----END CERTIFICATE-----\n"
-        caPem.writeText(pem(rootCert))
-        serverPem.writeText(pem(leafCert)+pem(rootCert))
+        caPem.writeText(pem(cert))
+        serverPem.writeText(pem(cert))
         hostFile.writeText(host)
         formatFile.writeText(formatVersion)
     }
