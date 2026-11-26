@@ -20,7 +20,8 @@ import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
-    private val reads = listOf("status.get","diagnostics.get","screen.log.get","screen.recovery.get","config.get","screen.boot.result.get")
+    private val reads = listOf("status.get","diagnostics.get","screen.log.get","screen.recovery.get","config.get","screen.boot.result.get","screen.update.get","screen.diagnostics.get","screen.media.get","screen.push.get","screen.stream.get","screen.link.get","screen.display.get","screen.appearance.get","screen.startup.get","screen.resources.get","screen.module.get")
+    private val sensitiveReads = setOf("config.get")
     private lateinit var target: EditText
     private lateinit var action: AutoCompleteTextView
     private lateinit var params: EditText
@@ -52,7 +53,7 @@ class MainActivity : Activity() {
         user=field("用户名（可选）")
         password=field("密码（不保存）").apply { inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         button("发送命令") { submit(false) }
-        button("全部诊断") { submit(true) }
+        button("全部诊断（不含敏感配置）") { submit(true) }
         interval=Spinner(this).apply { adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("1 秒","2 秒","5 秒","10 秒","30 秒")); setSelection(1); root.addView(this) }
         poll=button("开始只读轮询") { if(polling) stopPoll() else if(action.text.toString() in reads) { polling=true; poll.text="停止轮询"; submit(false) } else toast("仅允许只读命令轮询") }
         button("复制结果") { (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("G3 Debug",log.toString())); toast("已复制") }
@@ -65,7 +66,7 @@ class MainActivity : Activity() {
     private fun stopPoll() { polling=false; handler.removeCallbacksAndMessages(null); poll.text="开始只读轮询" }
     override fun onStop() { stopPoll(); super.onStop() }
     override fun onDestroy() { closed=true; worker.shutdownNow(); super.onDestroy() }
-    private fun append(s:String) { log.append(s).append("\n"); if(log.length>200000) log.delete(0,log.length-200000); output.text=log.toString() }
+    private fun append(s:String) { log.append(s).append("\n"); if(log.length>1000000) log.delete(0,log.length-1000000); output.text=log.toString() }
     private fun submit(all:Boolean) {
         if(busy) { if(polling) handler.postDelayed({submit(false)},500); return }
         val reqs=try {
@@ -76,7 +77,7 @@ class MainActivity : Activity() {
             val cmd=action.text.toString().trim(); require(cmd.isNotEmpty())
             val auth=if(user.text.isNotEmpty()) android.util.Base64.encodeToString((user.text.toString()+":"+password.text.toString()).toByteArray(),android.util.Base64.NO_WRAP) else ""
             getPreferences(0).edit().putString("target",base).apply()
-            if(all) reads.take(4).map { Request(base,it,JSONObject(),auth) } else listOf(Request(base,cmd,JSONObject(params.text.toString().ifBlank{"{}"}),auth))
+            if(all) reads.filterNot { it in sensitiveReads }.map { Request(base,it,JSONObject(),auth) } else listOf(Request(base,cmd,JSONObject(params.text.toString().ifBlank{"{}"}),auth))
         } catch(e:Exception) { stopPoll(); toast("地址或 JSON 参数无效"); return }
         if(polling && reqs.any { it.action !in reads }) { stopPoll(); return }
         if(reqs.any { it.action !in reads }) {
@@ -89,7 +90,7 @@ class MainActivity : Activity() {
         worker.execute {
             for(r in reqs) {
                 val result=try { call(r) } catch(e:Exception) { "ERROR: "+e.toString() }
-                handler.post { if(!closed) append("========== "+r.action+" ==========\n"+result) }
+                handler.post { if(!closed) append("========== "+r.action+" · "+java.text.SimpleDateFormat("HH:mm:ss.SSS",java.util.Locale.US).format(java.util.Date())+" ==========\n"+result) }
             }
             handler.post { busy=false; if(!closed && polling) handler.postDelayed({submit(false)},listOf(1000L,2000L,5000L,10000L,30000L)[interval.selectedItemPosition]) }
         }
@@ -118,7 +119,7 @@ class MainActivity : Activity() {
             c.outputStream.use { it.write(body) }
             val code=c.responseCode
             val bytes=(if(code>=400)c.errorStream else c.inputStream)?.use { input -> val out=java.io.ByteArrayOutputStream(); val b=ByteArray(4096); while(out.size()<262144){val n=input.read(b,0,minOf(b.size,262144-out.size()));if(n<0)break;out.write(b,0,n)};out.toByteArray() } ?: byteArrayOf()
-            val raw=if(code in 200..299) try { MessagePack.newDefaultUnpacker(bytes).use { it.unpackValue().toJson() } } catch(e:Exception){String(bytes,Charsets.UTF_8)} else String(bytes,Charsets.UTF_8)
+            val raw=try { MessagePack.newDefaultUnpacker(bytes).use { val value=it.unpackValue(); require(!it.hasNext()); require(value.isMapValue || value.isArrayValue); value.toJson() } } catch(e:Exception){String(bytes,Charsets.UTF_8)}
             val pretty=try { JSONObject(raw).toString(2) } catch(e:Exception){raw}
             return "HTTP "+code+" · "+(System.currentTimeMillis()-start)+" ms\n"+pretty
         } finally { c.disconnect() }
